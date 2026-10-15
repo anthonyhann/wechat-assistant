@@ -16,7 +16,7 @@ function makeConfig () {
     trigger: { privateChat: true, roomMentionOnly: true, maxMessageAgeSeconds: 120 },
     adminServer: { enabled: false, port: 3000, token: '' },
   }))
-  writeFileSync(join(dir, 'config', 'backup.json'), JSON.stringify({ enabled: true, roomWhitelistMode: 'db', mediaTypes: ['Image', 'Attachment'], maxFileSizeMB: 100, dedupeByHash: true, saveAllTextMessages: true, timeZone: 'Asia/Shanghai' }))
+  writeFileSync(join(dir, 'config', 'backup.json'), JSON.stringify({ enabled: true, mediaTypes: ['Image', 'Attachment'], maxFileSizeMB: 100, dedupeByHash: true, saveAllTextMessages: true, timeZone: 'Asia/Shanghai' }))
   writeFileSync(join(dir, 'config', 'ai.json'), JSON.stringify({ provider: 'mock', ark: { model: 'm', baseUrl: 'https://x.com', apiKeyEnv: 'ARK_API_KEY', temperature: 0.7, maxTokens: 1024 }, openaiCompat: { model: 'm', baseUrl: 'https://x.com', apiKeyEnv: 'OPENAI_API_KEY' }, memory: { enabled: true, windowSize: 10, ttlMinutes: 30 }, systemPrompt: 'p' }))
   writeFileSync(join(dir, 'config', 'safety.json'), JSON.stringify({ localFilter: { enabled: true, wordFile: 'sensitive-words.txt' }, llmAudit: { enabled: false, provider: 'ark' }, fallbackReply: 'fallback', logInterceptions: true }))
   writeFileSync(join(dir, 'config', 'flows.json'), JSON.stringify({ flows: [] }))

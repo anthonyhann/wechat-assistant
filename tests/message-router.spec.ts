@@ -23,7 +23,7 @@ function fakeMsg (overrides: Partial<any> = {}): any {
 function makeConfig (): AppConfig {
   return {
     bot: { name: 't', trigger: { privateChat: true, roomMentionOnly: true, maxMessageAgeSeconds: 120 }, adminServer: { enabled: false, port: 3000, token: '' } },
-    backup: { enabled: true, roomWhitelistMode: 'db', mediaTypes: ['Image', 'Attachment'], maxFileSizeMB: 100, dedupeByHash: true, saveAllTextMessages: true, timeZone: 'Asia/Shanghai' },
+    backup: { enabled: true, mediaTypes: ['Image', 'Attachment'], maxFileSizeMB: 100, dedupeByHash: true, saveAllTextMessages: true, timeZone: 'Asia/Shanghai' },
     ai: { provider: 'mock', ark: { model: 'm', baseUrl: 'https://x.com', apiKeyEnv: 'K', temperature: 0.7, maxTokens: 1024 }, openaiCompat: { model: 'm', baseUrl: 'https://x.com', apiKeyEnv: 'K' }, memory: { enabled: true, windowSize: 10, ttlMinutes: 30 }, systemPrompt: 'p' },
     safety: { localFilter: { enabled: true, wordFile: 'w.txt' }, llmAudit: { enabled: false, provider: 'ark' }, fallbackReply: 'fb', logInterceptions: true },
     flows: [],
