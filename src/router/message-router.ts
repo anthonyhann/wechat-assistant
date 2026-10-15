@@ -194,7 +194,10 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
             const sender = createSafeSender({ target: msg, safetyGate, log, conversationId })
             const aiResult = await aiModule.chat(conversationId, promptText, sender)
             repo.setResult(msg.id, 'ai_result', aiResult.reason)
-            repo.setHandledBy(msg.id, 'ai')
+            // throttled 时不写 handled_by='ai'（没发出回复，留给 ignored 兜底）
+            if (aiResult.replied) {
+              repo.setHandledBy(msg.id, 'ai')
+            }
           }
         }
       }

@@ -17,6 +17,9 @@ const AI: AppConfig['ai'] = {
   openaiCompat: { model: 'm', baseUrl: 'https://x.com', apiKeyEnv: 'K' },
   memory: { enabled: true, windowSize: 10, ttlMinutes: 30 },
   systemPrompt: '你是微信群个人助理',
+  // 既有用例连续调同一对话（如「多轮对话时历史进入 prompt」），不能受节流影响
+  throttleSeconds: 0,
+  maxPromptChars: 8000,
 }
 
 function stubAdapter (r: any): LlmAdapter {

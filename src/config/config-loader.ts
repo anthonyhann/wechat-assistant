@@ -84,6 +84,10 @@ const AiConfigSchema = z.object({
     ttlMinutes: z.number().positive(),
   }),
   systemPrompt: z.string().min(1),
+  /** AI 调用节流：同一对话多少秒内最多 1 次（0=不节流） */
+  throttleSeconds: z.number().int().min(0).default(10),
+  /** 单条用户消息最大字符数（超出截断） */
+  maxPromptChars: z.number().int().positive().default(8000),
 })
 
 const SafetyConfigSchema = z.object({
