@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import 'dotenv/config'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadConfig } from './config/config-loader.js'
 import { createLogger } from './utils/logger.js'
@@ -14,6 +15,7 @@ import { createFlowEngine } from './flow/flow-engine.js'
 import { createLlmAdapter } from './llm/llm-factory.js'
 import { createMemoryWindow, createMirroredMemory } from './ai/memory.js'
 import { createAiModule } from './ai/ai-module.js'
+import { createAdminServer } from './admin/admin-server.js'
 
 async function main (): Promise<void> {
   const log = createLogger('Main')
@@ -61,10 +63,27 @@ async function main (): Promise<void> {
   })
 
   const router = createMessageRouter({ repo, log, config, backup, safetyGate, flowEngine, aiModule })
+
+  // 管理台
+  let adminServer: ReturnType<typeof createAdminServer> | null = null
+  if (config.bot.adminServer.enabled) {
+    adminServer = createAdminServer({
+      db, config, log,
+      reloadFlows: () => {
+        // 重新读 config/flows.json 并替换 config.flows（可变引用共享）
+        const fresh = JSON.parse(readFileSync(join(process.cwd(), 'config', 'flows.json'), 'utf-8'))
+        config.flows.length = 0
+        config.flows.push(...fresh.flows)
+      },
+    })
+    await adminServer.start()
+  }
+
   const bot = createBot({ config, log, onMessage: msg => router.handle(msg) })
 
   const shutdown = async (signal: string) => {
     log.info('收到 %s，正在退出...', signal)
+    if (adminServer) await adminServer.stop()
     await bot.stop()
     db.close()
     process.exit(0)
