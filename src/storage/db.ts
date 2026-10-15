@@ -98,6 +98,7 @@ const INDEX_DDL = [
   'CREATE INDEX IF NOT EXISTS idx_media_msg ON media_files(message_id)',
   'CREATE INDEX IF NOT EXISTS idx_usage_conv ON usage_logs(conversation_id, created_at)',
   'CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_logs(created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_conv_created ON conversations(created_at)',
 ]
 
 function migrateIndexes (db: Database.Database): void {
