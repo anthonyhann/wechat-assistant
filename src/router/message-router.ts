@@ -50,6 +50,9 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
         is_self: 0,
         handled_by: 'logged',
         safety_result: null,
+        backup_result: null,
+        flow_result: null,
+        ai_result: null,
         created_at: Date.now(),
       })
 

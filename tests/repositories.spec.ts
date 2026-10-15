@@ -91,7 +91,8 @@ describe('MessageRepository 扩展', () => {
       repo.insert({
         id: 'm1', conversation_id: 'c1', conversation_type: 'room', talker_id: 't1',
         talker_name: '张三', msg_type: 7, text: 'hi', timestamp: 1, is_self: 0,
-        handled_by: 'logged', safety_result: null, created_at: 1,
+        handled_by: 'logged', safety_result: null,
+        backup_result: null, flow_result: null, ai_result: null, created_at: 1,
       })
       repo.setHandledBy('m1', 'backup')
       expect(repo.findById('m1')!.handled_by).toBe('backup')

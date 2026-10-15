@@ -30,7 +30,8 @@ describe('SQLite 存储层', () => {
       const row: MessageRow = {
         id: 'msg-1', conversation_id: 'conv-1', conversation_type: 'contact',
         talker_id: 'talker-1', talker_name: '张三', msg_type: 7, text: '你好',
-        timestamp: 1700000000000, is_self: 0, handled_by: null, safety_result: null, created_at: 1700000000000,
+        timestamp: 1700000000000, is_self: 0, handled_by: null, safety_result: null,
+        backup_result: null, flow_result: null, ai_result: null, created_at: 1700000000000,
       }
       repo.insert(row)
       expect(repo.countByConversation('conv-1')).toBe(1)
@@ -50,7 +51,8 @@ describe('SQLite 存储层', () => {
       const row: MessageRow = {
         id: 'msg-dup', conversation_id: 'conv-1', conversation_type: 'contact',
         talker_id: 'talker-1', talker_name: null, msg_type: 7, text: 'hi',
-        timestamp: 1700000000000, is_self: 0, handled_by: null, safety_result: null, created_at: 1700000000000,
+        timestamp: 1700000000000, is_self: 0, handled_by: null, safety_result: null,
+        backup_result: null, flow_result: null, ai_result: null, created_at: 1700000000000,
       }
       repo.insert(row)
       expect(() => repo.insert(row)).not.toThrow()

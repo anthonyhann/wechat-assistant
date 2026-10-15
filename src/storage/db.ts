@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS messages (
   is_self           INTEGER DEFAULT 0,
   handled_by        TEXT,
   safety_result     TEXT,
+  backup_result     TEXT,
+  flow_result       TEXT,
+  ai_result         TEXT,
   created_at        INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id, timestamp);
@@ -94,6 +97,9 @@ export interface MessageRow {
   is_self: number
   handled_by: string | null
   safety_result: string | null
+  backup_result: string | null
+  flow_result: string | null
+  ai_result: string | null
   created_at: number
 }
 
@@ -103,9 +109,11 @@ export class MessageRepository {
   insert (row: MessageRow): void {
     this.db.prepare(`
       INSERT INTO messages (id, conversation_id, conversation_type, talker_id, talker_name,
-        msg_type, text, timestamp, is_self, handled_by, safety_result, created_at)
+        msg_type, text, timestamp, is_self, handled_by, safety_result,
+        backup_result, flow_result, ai_result, created_at)
       VALUES (@id, @conversation_id, @conversation_type, @talker_id, @talker_name,
-        @msg_type, @text, @timestamp, @is_self, @handled_by, @safety_result, @created_at)
+        @msg_type, @text, @timestamp, @is_self, @handled_by, @safety_result,
+        @backup_result, @flow_result, @ai_result, @created_at)
       ON CONFLICT(id) DO NOTHING
     `).run(row)
   }
@@ -121,6 +129,24 @@ export class MessageRepository {
 
   setHandledBy (id: string, handledBy: string): void {
     this.db.prepare('UPDATE messages SET handled_by = ? WHERE id = ?').run(handledBy, id)
+  }
+
+  private static readonly RESULT_COLUMNS = ['backup_result', 'flow_result', 'ai_result'] as const
+
+  /**
+   * 更新消息的某个结果列。
+   * 列名走白名单校验 —— 列名无法用参数绑定，必须防注入。
+   */
+  setResult (id: string, column: 'backup_result' | 'flow_result' | 'ai_result', value: string): void {
+    if (!MessageRepository.RESULT_COLUMNS.includes(column)) {
+      throw new Error(`非法的结果列名: ${String(column)}`)
+    }
+    // 列名来自上面校验过的白名单，此处拼接安全
+    this.db.prepare(`UPDATE messages SET ${column} = ? WHERE id = ?`).run(value, id)
+  }
+
+  setSafetyResult (id: string, value: string): void {
+    this.db.prepare('UPDATE messages SET safety_result = ? WHERE id = ?').run(value, id)
   }
 
   findById (id: string): MessageRow | undefined {
@@ -198,5 +224,34 @@ export class WhitelistRepository {
 
   remove (roomId: string): void {
     this.db.prepare('DELETE FROM whitelist_rooms WHERE room_id = ?').run(roomId)
+  }
+}
+
+export interface SafetyLogRow {
+  direction: 'inbound' | 'outbound'
+  layer: string
+  matched_word: string | null
+  snippet: string | null
+  conversation_id: string | null
+  created_at: number
+}
+
+export class SafetyLogRepository {
+  constructor (private readonly db: Database.Database) {}
+
+  insert (row: SafetyLogRow): void {
+    this.db.prepare(`
+      INSERT INTO safety_logs (direction, layer, matched_word, snippet, conversation_id, created_at)
+      VALUES (@direction, @layer, @matched_word, @snippet, @conversation_id, @created_at)
+    `).run(row)
+  }
+
+  recent (limit: number): SafetyLogRow[] {
+    return this.db.prepare('SELECT * FROM safety_logs ORDER BY created_at DESC, id DESC LIMIT ?').all(limit) as SafetyLogRow[]
+  }
+
+  countAll (): number {
+    const row = this.db.prepare('SELECT COUNT(*) AS c FROM safety_logs').get() as { c: number }
+    return row.c
   }
 }
