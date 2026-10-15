@@ -264,7 +264,7 @@ describe('message-router × 阶段 2（安全 + 流程）', () => {
       const cfg = { ...makeConfig(), flows: [flow] }
       const sent: string[] = []
       const run = vi.fn(async (_f: any, ctx: any) => {
-        await ctx.reply('回复内容'); return { executed: true, reason: 'ok', stepsRun: 1 }
+        await ctx.sender.send('回复内容'); return { executed: true, reason: 'ok', stepsRun: 1 }
       })
       const router = createMessageRouter({
         repo, log: createLogger('R'), config: cfg, safetyGate: passGate as any,

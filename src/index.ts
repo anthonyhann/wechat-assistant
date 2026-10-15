@@ -33,7 +33,8 @@ async function main (): Promise<void> {
     join(process.cwd(), 'config', config.safety.localFilter.wordFile),
   )
   const safetyGate = createSafetyGate({ wordFilter, safetyRepo, log, config })
-  const flowEngine = createFlowEngine({ safetyGate, log, cooldownSeconds: 60 })
+  // 流程引擎不再需要闸门 —— 闸门收口在 SafeSender 内（见 src/safety/safe-sender.ts）
+  const flowEngine = createFlowEngine({ log, cooldownSeconds: 60 })
 
   const router = createMessageRouter({ repo, log, config, backup, safetyGate, flowEngine })
   const bot = createBot({ config, log, onMessage: msg => router.handle(msg) })

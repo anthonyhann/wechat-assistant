@@ -5,7 +5,7 @@ import type { BackupModule } from '../backup/backup-module.js'
 import type { SafetyGate } from '../safety/safety-gate.js'
 import type { FlowEngine } from '../flow/flow-engine.js'
 import { matchFlow } from '../flow/flow-engine.js'
-import { FileBox } from 'file-box'
+import { createSafeSender } from '../safety/safe-sender.js'
 
 export interface MessageRouter {
   handle (msg: any): Promise<void>
@@ -93,7 +93,9 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
       }
 
       // 6. 关键词流程（阶段 2）
-      if (flowEngine && text) {
+      // flowEngine 与 safetyGate 必须同时存在：发送通道 SafeSender 内含闸门，
+      // 缺闸门就不允许创建 sender（宁可流程不跑，也不能出现无闸门的出口）。
+      if (flowEngine && safetyGate && text) {
         const isRoom = Boolean(room)
 
         // 群内需 @ 机器人；私聊无需
@@ -112,15 +114,15 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
         if (mentioned) {
           const flow = matchFlow(config.flows, text, isRoom ? 'room' : 'contact')
           if (flow) {
+            // 唯一发送通道：内含安全闸门与 FileBox 封装。
+            // 下游模块（流程引擎 / 阶段3 AI）只拿得到 sender，拿不到 msg ——
+            // 从结构上杜绝「绕过闸门的 msg.say」。
+            const sender = createSafeSender({ target: msg, safetyGate, log, conversationId })
             const runResult = await flowEngine.run(flow, {
               conversationId,
               conversationType: isRoom ? 'room' : 'contact',
               isRoom,
-              // 所有对外文本统一经 flowEngine（内部每步都过 checkOutbound 闸门）
-              reply: async (t: string) => { await msg.say(t) },
-              // 必须包成 FileBox：wechaty 的 sayableToPayload 对 string 走文字分支，
-              // 直接传路径会把 "/path/x.png" 当文本发出去（用户看到一串路径而非图片）。
-              sayImage: async (p: string) => { await msg.say(FileBox.fromFile(p)) },
+              sender,
             })
             // 记录命中的流程名与执行结果。
             // reason 体现 cooldown / no_executable_steps / error 等分支 —— 阶段 4 管理台
