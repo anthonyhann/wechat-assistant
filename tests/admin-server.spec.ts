@@ -170,6 +170,72 @@ describe('admin-server API', () => {
   })
 })
 
+describe('admin-server flows 校验与 XSS 防护', () => {
+  test('PUT /api/flows 拒绝畸形配置（不写文件）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-admin-'))
+    const db = createDatabase(join(dir, 't.sqlite'))
+    const config = makeConfig()
+    const server = createAdminServer({ db, config, log: createLogger('T'), reloadFlows: () => {} })
+    await server.start()
+    try {
+      const port = server.port
+      const res = await fetch(`http://127.0.0.1:${port}/api/flows`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ flows: [{ foo: 1 }] }),
+      })
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toBeTruthy()
+    } finally {
+      await server.stop()
+      db.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('PUT /api/flows 拒绝非数组 flows', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-admin-'))
+    const db = createDatabase(join(dir, 't.sqlite'))
+    const config = makeConfig()
+    const server = createAdminServer({ db, config, log: createLogger('T'), reloadFlows: () => {} })
+    await server.start()
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/api/flows`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ flows: 'not-array' }),
+      })
+      expect(res.status).toBe(400)
+    } finally {
+      await server.stop()
+      db.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('看板 HTML 含 esc 转义函数且消息内容被转义', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-admin-'))
+    const db = createDatabase(join(dir, 't.sqlite'))
+    const config = makeConfig()
+    const server = createAdminServer({ db, config, log: createLogger('T'), reloadFlows: () => {} })
+    await server.start()
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/`)
+      const html = await res.text()
+      // esc 函数存在
+      expect(html).toContain('esc=')
+      expect(html).toContain('&amp;')
+      // 消息内容渲染时经 esc 转义
+      expect(html).toContain('esc((m.text')
+    } finally {
+      await server.stop()
+      db.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('admin-server 鉴权', () => {
   test('token 为空串时不鉴权（仅本地可用）', async () => {
     const s = await setup()

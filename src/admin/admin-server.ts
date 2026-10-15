@@ -2,9 +2,10 @@ import express, { type Express, type Request, type Response, type NextFunction }
 import type { Server } from 'node:http'
 import type Database from 'better-sqlite3'
 import type { AppConfig } from '../config/config-loader.js'
+import { validateFlowsConfig } from '../config/config-loader.js'
 import type { Logger } from '../utils/logger.js'
 import { MessageRepository, WhitelistRepository, SafetyLogRepository, UsageRepository, MediaFileRepository } from '../storage/db.js'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 
 export interface AdminServerDeps {
@@ -43,6 +44,8 @@ button:hover{background:#1d4ed8}.ok{color:#059669}.err{color:#dc2626}</style>
 <div class="card"><h2>LLM 用量</h2><div id="usage"></div></div>
 <script>
 const B=''
+// HTML 转义：消息内容/群名/流程名/审计片段均来自用户输入，必须转义防 XSS
+const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')
 async function load(){
   const s=await(await fetch(B+'/api/stats')).json()
   document.getElementById('stats').innerHTML=
@@ -51,19 +54,19 @@ async function load(){
     \`<div class="card"><div class="stat">\${s.usage?.totalTokens??0}</div><div class="label">今日 tokens</div></div>\`
   const msgs=await(await fetch(B+'/api/messages?limit=50')).json()
   document.getElementById('messages').innerHTML='<table><tr><th>时间</th><th>会话</th><th>类型</th><th>内容</th><th>处理</th><th>安全</th></tr>'+
-    msgs.map(m=>\`<tr><td>\${new Date(m.created_at).toLocaleTimeString()}</td><td>\${m.conversation_id}</td><td>\${m.msg_type}</td><td>\${(m.text||'').slice(0,50)}</td><td>\${m.handled_by||''}</td><td class="\${m.safety_result?'err':'ok'}">\${m.safety_result||'-'}</td></tr>\`).join('')+'</table>'
+    msgs.map(m=>\`<tr><td>\${new Date(m.created_at).toLocaleTimeString()}</td><td>\${esc(m.conversation_id)}</td><td>\${esc(m.msg_type)}</td><td>\${esc((m.text||'').slice(0,50))}</td><td>\${esc(m.handled_by||'')}</td><td class="\${m.safety_result?'err':'ok'}">\${esc(m.safety_result||'-')}</td></tr>\`).join('')+'</table>'
   const wl=await(await fetch(B+'/api/whitelist')).json()
   document.getElementById('whitelist').innerHTML='<table><tr><th>roomId</th><th>群名</th><th>操作</th></tr>'+
-    wl.map(w=>\`<tr><td>\${w.room_id}</td><td>\${w.room_name||''}</td><td><button onclick="delWhitelist('\${w.room_id}')">移除</button></td></tr>\`).join('')+'</table>'
+    wl.map(w=>\`<tr><td>\${esc(w.room_id)}</td><td>\${esc(w.room_name||'')}</td><td><button onclick="delWhitelist('\${esc(w.room_id)}')">移除</button></td></tr>\`).join('')+'</table>'
   const fl=await(await fetch(B+'/api/flows')).json()
   document.getElementById('flows').innerHTML='<table><tr><th>名称</th><th>触发词</th><th>范围</th><th>启用</th></tr>'+
-    fl.map(f=>\`<tr><td>\${f.name}</td><td>\${f.trigger}</td><td>\${f.scope}</td><td>\${f.enabled?'✅':'❌'}</td></tr>\`).join('')+'</table>'
+    fl.map(f=>\`<tr><td>\${esc(f.name)}</td><td>\${esc(f.trigger)}</td><td>\${esc(f.scope)}</td><td>\${f.enabled?'✅':'❌'}</td></tr>\`).join('')+'</table>'
   const sf=await(await fetch(B+'/api/safety-logs?limit=20')).json()
   document.getElementById('safety').innerHTML='<table><tr><th>时间</th><th>方向</th><th>层</th><th>命中词</th><th>片段</th></tr>'+
-    sf.map(l=>\`<tr><td>\${new Date(l.created_at).toLocaleTimeString()}</td><td>\${l.direction}</td><td>\${l.layer}</td><td>\${l.matched_word||''}</td><td>\${(l.snippet||'').slice(0,40)}</td></tr>\`).join('')+'</table>'
+    sf.map(l=>\`<tr><td>\${new Date(l.created_at).toLocaleTimeString()}</td><td>\${esc(l.direction)}</td><td>\${esc(l.layer)}</td><td>\${esc(l.matched_word||'')}</td><td>\${esc((l.snippet||'').slice(0,40))}</td></tr>\`).join('')+'</table>'
   const us=await(await fetch(B+'/api/usage?days=7')).json()
   document.getElementById('usage').innerHTML='<table><tr><th>日期</th><th>调用数</th><th>tokens</th></tr>'+
-    us.map(u=>\`<tr><td>\${u.day}</td><td>\${u.calls}</td><td>\${u.totalTokens}</td></tr>\`).join('')+'</table>'
+    us.map(u=>\`<tr><td>\${esc(u.day)}</td><td>\${esc(u.calls)}</td><td>\${esc(u.totalTokens)}</td></tr>\`).join('')+'</table>'
 }
 async function addWhitelist(){const roomId=document.getElementById('wlId').value.trim();if(!roomId)return
   await fetch(B+'/api/whitelist',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({roomId,roomName:document.getElementById('wlName').value.trim()||null})})
@@ -170,17 +173,20 @@ export function createAdminServer (deps: AdminServerDeps): AdminServer {
   })
 
   app.put('/api/flows', (req, res) => {
-    const flows = req.body?.flows
-    if (!Array.isArray(flows)) {
-      res.status(400).json({ error: 'flows array required' })
+    // 先校验结构：写入畸形配置会导致下一次启动 zod 校验失败、进程崩溃。
+    const validation = validateFlowsConfig(req.body)
+    if (!validation.ok) {
+      res.status(400).json({ error: validation.error })
       return
     }
-    // 写回 config/flows.json
+    // 原子写入：先写临时文件再 rename，避免写途中被 kill 留下截断文件。
     const flowsPath = join(process.cwd(), 'config', 'flows.json')
-    writeFileSync(flowsPath, JSON.stringify({ flows }, null, 2) + '\n', 'utf-8')
-    // 触发热更新
+    const tmpPath = flowsPath + '.tmp'
+    writeFileSync(tmpPath, JSON.stringify({ flows: validation.flows }, null, 2) + '\n', 'utf-8')
+    renameSync(tmpPath, flowsPath)
+    // 触发热更新（reloadFlows 读的就是刚写入的文件，已校验过）
     reloadFlows()
-    log.info('流程配置已更新（%d 条）并热生效', flows.length)
+    log.info('流程配置已更新（%d 条）并热生效', validation.flows.length)
     res.json({ ok: true })
   })
 

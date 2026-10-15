@@ -101,6 +101,18 @@ const SafetyConfigSchema = z.object({
 
 const FlowsConfigSchema = z.object({ flows: z.array(FlowSchema) })
 
+/**
+ * 校验 flows 配置结构（供管理台 PUT /api/flows 写入前校验）。
+ * 防止写入畸形配置导致下一次启动时 zod 校验失败、进程崩溃。
+ */
+export function validateFlowsConfig (data: unknown): { ok: true; flows: FlowConfig[] } | { ok: false; error: string } {
+  const result = FlowsConfigSchema.safeParse(data)
+  if (!result.success) {
+    return { ok: false, error: result.error.issues.map(i => `${i.path.join('.')} ${i.message}`).join('; ') }
+  }
+  return { ok: true, flows: result.data.flows }
+}
+
 export type FlowStep = z.infer<typeof FlowStepSchema>
 export type FlowConfig = z.infer<typeof FlowSchema>
 export type BotConfig = z.infer<typeof BotConfigSchema>
