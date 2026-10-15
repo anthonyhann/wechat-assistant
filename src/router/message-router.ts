@@ -1,6 +1,7 @@
 import type { MessageRepository } from '../storage/db.js'
 import type { Logger } from '../utils/logger.js'
 import type { AppConfig } from '../config/config-loader.js'
+import type { BackupModule } from '../backup/backup-module.js'
 
 export interface MessageRouter {
   handle (msg: any): Promise<void>
@@ -10,14 +11,15 @@ export interface RouterDeps {
   repo: MessageRepository
   log: Logger
   config: AppConfig
+  backup?: BackupModule
 }
 
 /**
  * 消息路由中枢。
- * 阶段 0：只做过滤 + 落库 + 日志。备份/关键词/AI 在后续阶段接入。
+ * 阶段 1：过滤 + 落库 + 日志 + 备份分发。关键词流程/AI 在后续阶段接入。
  */
 export function createMessageRouter (deps: RouterDeps): MessageRouter {
-  const { repo, log, config } = deps
+  const { repo, log, config, backup } = deps
 
   return {
     async handle (msg) {
@@ -33,7 +35,7 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
         return
       }
 
-      // 3. 落库
+      // 3. 落库（必须先于备份，保证部署失败时消息元数据不丢）
       const room = msg.room()
       const talker = msg.talker()
       repo.insert({
@@ -55,7 +57,15 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
       const where = room ? `群[${room.id}]` : `私聊[${talker.id}]`
       log.info('收到消息 %s 来自 %s 类型=%s', msg.id, where, msg.type())
 
-      // 后续阶段在此分发：备份模块 / 关键词流程引擎 / AI 对话模块
+      // 5. 备份分发（阶段 1）
+      if (backup) {
+        const outcome = await backup.handle(msg)
+        if (outcome.handled) {
+          repo.setHandledBy(msg.id, `backup:${outcome.reason}`)
+        }
+      }
+
+      // 后续阶段在此分发：关键词流程引擎 / AI 对话模块
     },
   }
 }

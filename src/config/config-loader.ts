@@ -40,6 +40,7 @@ const BotConfigSchema = z.object({
 
 const BackupConfigSchema = z.object({
   enabled: z.boolean(),
+  roomWhitelistMode: z.enum(['db', 'config']).default('db'),
   mediaTypes: z.array(z.enum(['Image', 'Attachment'])).min(1),
   maxFileSizeMB: z.number().positive(),
   dedupeByHash: z.boolean(),

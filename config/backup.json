@@ -1,5 +1,6 @@
 {
   "enabled": true,
+  "roomWhitelistMode": "db",
   "mediaTypes": ["Image", "Attachment"],
   "maxFileSizeMB": 100,
   "dedupeByHash": true,

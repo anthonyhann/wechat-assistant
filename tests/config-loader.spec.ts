@@ -24,8 +24,8 @@ const VALID_FILES: Record<string, string> = {
     adminServer: { enabled: true, port: 3000, token: '' },
   }),
   'backup.json': JSON.stringify({
-    enabled: true, mediaTypes: ['Image', 'Attachment'], maxFileSizeMB: 100,
-    dedupeByHash: true, saveAllTextMessages: true,
+    enabled: true, roomWhitelistMode: 'db', mediaTypes: ['Image', 'Attachment'], maxFileSizeMB: 100,
+    dedupeByHash: true, saveAllTextMessages: true, timeZone: 'Asia/Shanghai',
   }),
   'ai.json': JSON.stringify({
     provider: 'mock',

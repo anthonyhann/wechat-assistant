@@ -3,7 +3,8 @@ import 'dotenv/config'
 import { join } from 'node:path'
 import { loadConfig } from './config/config-loader.js'
 import { createLogger } from './utils/logger.js'
-import { createDatabase, MessageRepository } from './storage/db.js'
+import { createDatabase, MessageRepository, MediaFileRepository, WhitelistRepository } from './storage/db.js'
+import { createBackupModule } from './backup/backup-module.js'
 import { createBot } from './bot/bot.js'
 import { createMessageRouter } from './router/message-router.js'
 
@@ -18,7 +19,12 @@ async function main (): Promise<void> {
   const repo = new MessageRepository(db)
   log.info('数据库已就绪: %s', dbPath)
 
-  const router = createMessageRouter({ repo, log, config })
+  const mediaRepo = new MediaFileRepository(db)
+  const whitelistRepo = new WhitelistRepository(db)
+  const dataDir = process.env['DATA_DIR'] || join(process.cwd(), 'data')
+
+  const backup = createBackupModule({ mediaRepo, whitelistRepo, log, config, dataDir })
+  const router = createMessageRouter({ repo, log, config, backup })
   const bot = createBot({ config, log, onMessage: msg => router.handle(msg) })
 
   const shutdown = async (signal: string) => {

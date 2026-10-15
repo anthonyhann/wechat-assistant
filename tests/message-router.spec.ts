@@ -23,7 +23,7 @@ function fakeMsg (overrides: Partial<any> = {}): any {
 function makeConfig (): AppConfig {
   return {
     bot: { name: 't', trigger: { privateChat: true, roomMentionOnly: true, maxMessageAgeSeconds: 120 }, adminServer: { enabled: false, port: 3000, token: '' } },
-    backup: { enabled: true, mediaTypes: ['Image', 'Attachment'], maxFileSizeMB: 100, dedupeByHash: true, saveAllTextMessages: true },
+    backup: { enabled: true, roomWhitelistMode: 'db', mediaTypes: ['Image', 'Attachment'], maxFileSizeMB: 100, dedupeByHash: true, saveAllTextMessages: true, timeZone: 'Asia/Shanghai' },
     ai: { provider: 'mock', ark: { model: 'm', baseUrl: 'https://x.com', apiKeyEnv: 'K', temperature: 0.7, maxTokens: 1024 }, openaiCompat: { model: 'm', baseUrl: 'https://x.com', apiKeyEnv: 'K' }, memory: { enabled: true, windowSize: 10, ttlMinutes: 30 }, systemPrompt: 'p' },
     safety: { localFilter: { enabled: true, wordFile: 'w.txt' }, llmAudit: { enabled: false, provider: 'ark' }, fallbackReply: 'fb', logInterceptions: true },
     flows: [],
@@ -85,6 +85,63 @@ describe('message-router（阶段 0）', () => {
       expect(rows).toHaveLength(1)
       expect(rows[0]!.conversation_id).toBe('room-1')
       expect(rows[0]!.conversation_type).toBe('room')
+      db.close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('message-router × 备份分发', () => {
+  test('注入 backup 模块时被调用并更新 handled_by', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-rb-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const called: string[] = []
+      const fakeBackup = {
+        handle: async (msg: any) => { called.push(msg.id); return { handled: true, reason: 'backed_up' } },
+      }
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: makeConfig(), backup: fakeBackup as any,
+      })
+      const msg = fakeMsg()
+      await router.handle(msg)
+      expect(called).toEqual([msg.id])
+      expect(repo.findById(msg.id)!.handled_by).toBe('backup:backed_up')
+      db.close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('未注入 backup 时 handled_by 仍为 logged', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-rb-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const router = createMessageRouter({ repo, log: createLogger('R'), config: makeConfig() })
+      const msg = fakeMsg()
+      await router.handle(msg)
+      expect(repo.findById(msg.id)!.handled_by).toBe('logged')
+      db.close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('backup 抛错不影响消息落库', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-rb-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const exploding = { handle: async () => { throw new Error('boom') } }
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: makeConfig(), backup: exploding as any,
+      })
+      const msg = fakeMsg()
+      await expect(router.handle(msg)).rejects.toThrow('boom')
+      expect(repo.findById(msg.id)).toBeDefined()
       db.close()
     } finally {
       rmSync(dir, { recursive: true, force: true })
