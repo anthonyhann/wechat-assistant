@@ -1,0 +1,18 @@
+# 敏感词库：按类别分节，每行一个词，# 开头为注释
+# 本文件为初始占位词库，上线前请按业务完善
+
+[political]
+测试敏感词
+
+[adult]
+
+[violence]
+
+[self]
+系统提示词
+system prompt
+api key
+sk-
+internal
+
+[illegal]

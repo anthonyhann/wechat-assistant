@@ -1,0 +1,24 @@
+{
+  "flows": [
+    {
+      "name": "活动咨询",
+      "trigger": "活动|优惠|怎么参加",
+      "scope": "both",
+      "enabled": true,
+      "steps": [
+        { "type": "say", "content": "本周活动：老带新各得 20 元券～" },
+        { "type": "say", "content": "回复「报名」即可登记" }
+      ]
+    },
+    {
+      "name": "转人工",
+      "trigger": "人工|客服|投诉",
+      "scope": "both",
+      "enabled": true,
+      "steps": [
+        { "type": "say", "content": "已为您转接人工客服，请稍候" },
+        { "type": "handoff", "channel": "wecom" }
+      ]
+    }
+  ]
+}

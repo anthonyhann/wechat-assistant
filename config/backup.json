@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "mediaTypes": ["Image", "Attachment"],
+  "maxFileSizeMB": 100,
+  "dedupeByHash": true,
+  "saveAllTextMessages": true
+}

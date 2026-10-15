@@ -1,0 +1,12 @@
+{
+  "localFilter": {
+    "enabled": true,
+    "wordFile": "sensitive-words.txt"
+  },
+  "llmAudit": {
+    "enabled": false,
+    "provider": "ark"
+  },
+  "fallbackReply": "这个问题我暂时无法回答，我们可以聊聊别的～",
+  "logInterceptions": true
+}

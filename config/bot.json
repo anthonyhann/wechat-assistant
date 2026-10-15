@@ -1,0 +1,13 @@
+{
+  "name": "wechat-assistant",
+  "trigger": {
+    "privateChat": true,
+    "roomMentionOnly": true,
+    "maxMessageAgeSeconds": 120
+  },
+  "adminServer": {
+    "enabled": true,
+    "port": 3000,
+    "token": ""
+  }
+}
