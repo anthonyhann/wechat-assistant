@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadConfig } from '../src/config/config-loader.js'
+import { loadConfig, ConfigError } from '../src/config/config-loader.js'
 
 function withConfigDir (files: Record<string, string>, fn: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), 'wc-config-'))
@@ -60,13 +60,16 @@ describe('loadConfig', () => {
 
   test('缺失配置文件时抛错并指明文件名', () => {
     withConfigDir({ 'bot.json': VALID_FILES['bot.json']! }, dir => {
+      expect(() => loadConfig({ cwd: dir } as any)).toThrowError(ConfigError)
       expect(() => loadConfig({ cwd: dir } as any)).toThrowError(/backup\.json/)
     })
   })
 
   test('mediaTypes 含非法值时抛错', () => {
     withConfigDir({ ...VALID_FILES, 'backup.json': JSON.stringify({ ...JSON.parse(VALID_FILES['backup.json']!), mediaTypes: ['Video'] }) }, dir => {
-      expect(() => loadConfig({ cwd: dir } as any)).toThrowError()
+      expect(() => loadConfig({ cwd: dir } as any)).toThrowError(ConfigError)
+      expect(() => loadConfig({ cwd: dir } as any)).toThrowError(/backup\.json/)
+      expect(() => loadConfig({ cwd: dir } as any)).toThrowError(/Video/)
     })
   })
 
@@ -74,5 +77,16 @@ describe('loadConfig', () => {
     withConfigDir(VALID_FILES, dir => {
       expect(loadConfig({ cwd: dir } as any).safety.llmAudit.enabled).toBe(false)
     })
+  })
+
+  test('项目自身 config/ 目录可通过校验', () => {
+    const projectRoot = new URL('..', import.meta.url).pathname.replace(/\/$/, '')
+    const config = loadConfig({ cwd: projectRoot } as any)
+    expect(config.bot.name).toBe('wechat-assistant')
+    expect(config.backup.mediaTypes).toEqual(['Image', 'Attachment'])
+    expect(config.safety.llmAudit.enabled).toBe(false)
+    expect(config.ai.provider).toBe('mock')
+    expect(config.flows.map(f => f.name)).toEqual(['活动咨询', '转人工'])
+    expect(config.flows.every(f => f.steps.length > 0)).toBe(true)
   })
 })

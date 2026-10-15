@@ -92,7 +92,7 @@ export interface AppConfig {
   flows: FlowConfig[]
 }
 
-function readJson<T> (dir: string, fileName: string): unknown {
+function readJson (dir: string, fileName: string): unknown {
   const filePath = join(dir, 'config', fileName)
   if (!existsSync(filePath)) {
     throw new ConfigError(`配置文件缺失: config/${fileName}（路径: ${filePath}）`)
