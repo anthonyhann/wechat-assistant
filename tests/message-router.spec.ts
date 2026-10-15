@@ -158,10 +158,18 @@ describe('message-router × 备份分发', () => {
   // 回归（组合契约）：跳过/失败的原因必须落到 backup_result。
   // 超限与失败都不写 media_files 行，backup_result 是唯一审计痕迹——
   // 若只在 handled=true 时写入，"超限被拒"与"普通文本消息"在库里无法区分。
-  // 阶段 2 起：handled_by 固定写责任人 'backup'，原因独立成列。
+  // handled_by 是责任人口径：backup 只在真正对媒体做了决定时认领
+  // （backed_up/deduped/too_large/error）；not_media/not_room/not_whitelisted/disabled
+  // 表示备份不负责这条消息，handled_by 留给流程/AI/ignored 兜底。
+  // 跳过原因始终完整记录在 backup_result（阶段 1 的审计诉求不受影响）。
   test.each([
-    ['too_large'], ['error'], ['not_media'], ['not_whitelisted'], ['disabled'], ['not_room'],
-  ])('backup 返回 handled=false/reason=%s 时 backup_result 记为 %s 且 handled_by=backup', async (reason) => {
+    ['too_large', 'backup'],
+    ['error', 'backup'],
+    ['not_media', 'ignored'],
+    ['not_whitelisted', 'ignored'],
+    ['disabled', 'ignored'],
+    ['not_room', 'ignored'],
+  ])('backup 返回 handled=false/reason=%s 时 backup_result 记为 %s 且 handled_by=%s', async (reason, expectedHandledBy) => {
     const dir = mkdtempSync(join(tmpdir(), 'wc-rb-'))
     try {
       const db = createDatabase(join(dir, 't.sqlite'))
@@ -173,12 +181,54 @@ describe('message-router × 备份分发', () => {
       const msg = fakeMsg()
       await router.handle(msg)
       const row = repo.findById(msg.id)!
-      expect(row.handled_by).toBe('backup')
+      expect(row.handled_by).toBe(expectedHandledBy)
       expect(row.backup_result).toBe(reason)
       db.close()
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+
+  // 回归（终审 Important #1）：backup 不负责的消息不能伪装成「已处理」。
+  // 责任人口径恢复后：不被任何模块认领 → 'ignored'；处理中途抛错 → NULL（异常信号）。
+  test('backup 跳过的普通文本最终 handled_by=ignored（无人认领显式标记）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-hb2-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: makeConfig(),
+        backup: { handle: async () => ({ handled: false, reason: 'not_media' }) } as any,
+      })
+      const msg = fakeMsg({ text: () => '普通文本' })
+      await router.handle(msg)
+      expect(repo.findById(msg.id)!.handled_by).toBe('ignored')
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('AI 发送中途抛错时 handled_by 保持 NULL（异常信号不被覆盖）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-hb2-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const passThroughGate = {
+        checkOutbound: (t: string) => ({ safe: true, text: t }),
+        checkInbound: () => ({ matched: false }),
+      }
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: makeConfig(),
+        backup: { handle: async () => ({ handled: false, reason: 'not_media' }) } as any,
+        safetyGate: passThroughGate as any,
+        flowEngine: { run: async () => ({ executed: false, reason: 'no_match', stepsRun: 0 }) } as any,
+        aiModule: { chat: async () => { throw new Error('send failed') } } as any,
+      })
+      const msg = fakeMsg({ text: () => 'hi' })
+      await expect(router.handle(msg)).rejects.toThrow('send failed')
+      // backup 未认领（not_media）+ AI 抛错 → NULL 保留，专指「处理中途异常」
+      expect(repo.findById(msg.id)!.handled_by).toBeNull()
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
   // 回归（组合契约）：真 backup 模块的超限路径，端到端验证结果标记。
@@ -657,6 +707,30 @@ describe('message-router × 阶段 3（AI 分发）', () => {
       await router.handle(msg)
       expect(chat).not.toHaveBeenCalled()
       expect(repo.findById(msg.id)!.handled_by).toBe('ignored')
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  // 回归：纯「@机器人」无正文时不调 LLM（否则白付一次调用 + 骚扰用户）
+  test('群内 @ 但正文为空时不走 AI', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-p3-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const chat = vi.fn(async () => ({ replied: true, reason: 'ok' }))
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: makeConfig(), safetyGate: passGate as any,
+        flowEngine: { run: async () => ({ executed: false, reason: 'no_match', stepsRun: 0 }) } as any,
+        aiModule: { chat } as any,
+      })
+      const msg = fakeMsg({
+        text: () => '@机器人 ',
+        mentionText: async () => '   ',
+        room: () => ({ id: 'room-1', topic: async () => 'g' }),
+        mentionSelf: async () => true,
+      })
+      await router.handle(msg)
+      expect(chat).not.toHaveBeenCalled()
       db.close()
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })

@@ -24,8 +24,9 @@ export interface MemoryWindowOptions {
 /**
  * 内存滑动窗口记忆。
  *
- * 惰性过期：不在 get 时清掉的过期轮次仍占内存，但没有定时器开销；
- * 长期不活跃的会话随 append 时的 trim 自然淘汰。
+ * 惰性过期：get 时过滤过期轮次；**若过滤后一轮都不剩，顺手删除该会话键**——
+ * 否则「说过一次话再也不来」的会话会永久占一个 Map 键，长驻进程缓慢泄漏。
+ * 不设定时器（无后台开销）；再次活跃的会话在 append 时被截断到窗口内。
  */
 export function createMemoryWindow (opts: MemoryWindowOptions): MemoryWindow {
   const { windowSize, ttlMinutes } = opts
@@ -44,7 +45,10 @@ export function createMemoryWindow (opts: MemoryWindowOptions): MemoryWindow {
       const list = store.get(conversationId)
       if (!list) return []
       const now = Date.now()
-      return list.filter(t => now - t.at <= ttlMs)
+      const live = list.filter(t => now - t.at <= ttlMs)
+      // 全部过期 → 删除键，防止「僵尸会话」堆积
+      if (live.length === 0) store.delete(conversationId)
+      return live
     },
 
     clear (conversationId) {
