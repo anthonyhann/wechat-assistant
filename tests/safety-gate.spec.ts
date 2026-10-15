@@ -138,3 +138,26 @@ describe('checkInbound', () => {
     } finally { s.cleanup() }
   })
 })
+
+// 回归（安全关键）：兜底文案自身必须干净。
+// 若运维把 fallbackReply 配成含敏感词的内容，命中路径会把它原样发出 ——
+// 闸门反而成为敏感内容的出口。构造时必须降级为内置安全话术。
+describe('兜底文案自身的洁净性', () => {
+  test('fallbackReply 含敏感词时降级为内置安全话术', () => {
+    // 用本文件词库里真实存在的词（测试敏感词）构造脏兜底
+    const s = setup({ fallbackReply: '请联系管理员处理测试敏感词相关事宜' })
+    try {
+      const v = s.gate.checkOutbound('这里出现了测试敏感词')
+      expect(v.safe).toBe(false)
+      expect(v.text).not.toContain('测试敏感词')
+      expect(v.text).not.toContain('联系人')
+    } finally { s.cleanup() }
+  })
+
+  test('fallbackReply 干净时按配置使用（不误降级）', () => {
+    const s = setup({ fallbackReply: '这个我暂时答不上来～' })
+    try {
+      expect(s.gate.checkOutbound('测试敏感词').text).toBe('这个我暂时答不上来～')
+    } finally { s.cleanup() }
+  })
+})

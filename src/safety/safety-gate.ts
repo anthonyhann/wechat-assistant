@@ -41,6 +41,24 @@ let warnedDisabled = false
 export function createSafetyGate (deps: SafetyGateDeps): SafetyGate {
   const { wordFilter, safetyRepo, log, config } = deps
 
+  /**
+   * L3 兜底文案本身也必须干净。
+   *
+   * 若运维把 fallbackReply 配成含敏感词的内容（如「请联系管理员获取 sk-xxx」），
+   * 命中路径会把它原样发出 —— 闸门反而成了敏感内容的出口。启动时一次性检查，
+   * 命中则降级到硬编码常量并告警，绝不让脏兜底上生产线。
+   */
+  const HARD_FALLBACK = '这个问题我暂时无法回答，我们可以聊聊别的～'
+  const configuredFallback = config.safety.fallbackReply
+  const fallbackIsClean = !wordFilter.check(configuredFallback).matched
+  if (!fallbackIsClean) {
+    log.error(
+      'safety.fallbackReply 自身命中敏感词，已降级为内置安全话术（请修正配置）: %s',
+      configuredFallback,
+    )
+  }
+  const safeFallback = fallbackIsClean ? configuredFallback : HARD_FALLBACK
+
   function record (direction: 'inbound' | 'outbound', text: string, category: string, word: string, conversationId?: string | null): void {
     if (!config.safety.logInterceptions) return
     try {
@@ -77,10 +95,10 @@ export function createSafetyGate (deps: SafetyGateDeps): SafetyGate {
       record('outbound', text, hit.category, hit.word, conversationId)
       log.warn('出站内容被拦截 category=%s word=%s conv=%s', hit.category, hit.word, conversationId ?? '-')
 
-      // L3：绝不让原文出站
+      // L3：绝不让原文出站（兜底文案本身已在构造时校验过是干净的）
       return {
         safe: false,
-        text: config.safety.fallbackReply,
+        text: safeFallback,
         reason: `blocked:L1:${hit.category}`,
         category: hit.category,
         word: hit.word,
