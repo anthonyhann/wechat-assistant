@@ -1,5 +1,6 @@
 import type { LlmAdapter, LlmRequest, LlmResult } from './llm-interface.js'
 import { postJson } from './llm-interface.js'
+import type { Logger } from '../utils/logger.js'
 
 export interface OpenaiAdapterOptions {
   apiKey: string
@@ -7,6 +8,8 @@ export interface OpenaiAdapterOptions {
   baseUrl: string
   timeoutMs?: number
   fetchImpl?: typeof fetch
+  /** 可选日志：只记录结果摘要（**绝不记录 apiKey 与响应体**） */
+  log?: Logger
 }
 
 /** OpenAI 兼容适配器 */
@@ -27,10 +30,14 @@ export function createOpenaiAdapter (opts: OpenaiAdapterOptions): LlmAdapter {
         },
       })
 
-      if (!res.ok) return { ok: false, error: res.error, retryable: res.retryable }
+      if (!res.ok) {
+        opts.log?.warn('openai 调用失败 model=%s: %s', opts.model, res.error)
+        return { ok: false, error: res.error, retryable: res.retryable }
+      }
 
       const text = res.json?.choices?.[0]?.message?.content
       if (typeof text !== 'string') {
+        opts.log?.warn('openai 响应畸形 model=%s', opts.model)
         return { ok: false, error: '响应缺少 choices[0].message.content', retryable: false }
       }
       return { ok: true, text }
