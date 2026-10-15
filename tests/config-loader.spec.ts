@@ -89,4 +89,25 @@ describe('loadConfig', () => {
     expect(config.flows.map(f => f.name)).toEqual(['活动咨询', '转人工'])
     expect(config.flows.every(f => f.steps.length > 0)).toBe(true)
   })
+
+  // 回归：非法时区必须在加载期就失败。若放行，Intl 会在运行期抛 RangeError，
+  // 而备份模块会把它吞成单条消息的 error → 所有媒体备份静默失效但进程"健康"。
+  test('非法 timeZone 在加载期报错（而非运行期静默失效）', () => {
+    withConfigDir({
+      ...VALID_FILES,
+      'backup.json': JSON.stringify({ ...JSON.parse(VALID_FILES['backup.json']!), timeZone: 'Bad/Zone' }),
+    }, dir => {
+      expect(() => loadConfig({ cwd: dir } as any)).toThrowError(ConfigError)
+      expect(() => loadConfig({ cwd: dir } as any)).toThrowError(/timeZone/)
+    })
+  })
+
+  test('合法 timeZone 通过校验', () => {
+    withConfigDir({
+      ...VALID_FILES,
+      'backup.json': JSON.stringify({ ...JSON.parse(VALID_FILES['backup.json']!), timeZone: 'Asia/Shanghai' }),
+    }, dir => {
+      expect(loadConfig({ cwd: dir } as any).backup.timeZone).toBe('Asia/Shanghai')
+    })
+  })
 })

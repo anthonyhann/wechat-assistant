@@ -9,6 +9,20 @@ export class ConfigError extends Error {
   }
 }
 
+/**
+ * 校验是否为合法的 IANA 时区名。
+ * 非法值会在运行期由 Intl 抛 RangeError —— 而备份模块会把它吞成单条消息的
+ * error，表现为「所有媒体备份静默失效但进程健康」。故在配置加载期就失败。
+ */
+function isValidTimeZone (tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone: tz })
+    return true
+  } catch {
+    return false
+  }
+}
+
 const FlowStepSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('say'), content: z.string().min(1) }),
   z.object({ type: z.literal('image'), path: z.string().min(1) }),
@@ -45,7 +59,9 @@ const BackupConfigSchema = z.object({
   dedupeByHash: z.boolean(),
   saveAllTextMessages: z.boolean(),
   // 媒体目录按哪个时区分日；缺省 Asia/Shanghai，避免容器 TZ=UTC 时凌晨消息落到前一天
-  timeZone: z.string().default('Asia/Shanghai'),
+  timeZone: z.string().default('Asia/Shanghai').refine(isValidTimeZone, {
+    message: '不是合法的 IANA 时区名（如 Asia/Shanghai）',
+  }),
 })
 
 const AiConfigSchema = z.object({

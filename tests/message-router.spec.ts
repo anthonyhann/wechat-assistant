@@ -2,8 +2,9 @@ import { describe, expect, test, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createDatabase, MessageRepository } from '../src/storage/db.js'
+import { createDatabase, MessageRepository, MediaFileRepository, WhitelistRepository } from '../src/storage/db.js'
 import { createMessageRouter } from '../src/router/message-router.js'
+import { createBackupModule } from '../src/backup/backup-module.js'
 import { createLogger } from '../src/utils/logger.js'
 import type { AppConfig } from '../src/config/config-loader.js'
 
@@ -142,6 +143,70 @@ describe('message-router × 备份分发', () => {
       const msg = fakeMsg()
       await expect(router.handle(msg)).rejects.toThrow('boom')
       expect(repo.findById(msg.id)).toBeDefined()
+      db.close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // 回归（组合契约）：跳过/失败的原因必须落到 handled_by。
+  // 超限与失败都不写 media_files 行，handled_by 是唯一审计痕迹——
+  // 若只在 handled=true 时写入，"超限被拒"与"普通文本消息"在库里无法区分。
+  test.each([
+    ['too_large', 'backup:too_large'],
+    ['error', 'backup:error'],
+    ['not_media', 'backup:not_media'],
+    ['not_whitelisted', 'backup:not_whitelisted'],
+    ['disabled', 'backup:disabled'],
+    ['not_room', 'backup:not_room'],
+  ])('backup 返回 handled=false/reason=%s 时 handled_by 记为 %s', async (reason, expected) => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-rb-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const skipping = { handle: async () => ({ handled: false, reason }) }
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: makeConfig(), backup: skipping as any,
+      })
+      const msg = fakeMsg()
+      await router.handle(msg)
+      expect(repo.findById(msg.id)!.handled_by).toBe(expected)
+      db.close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // 回归（组合契约）：真 backup 模块的超限路径，端到端验证 handled_by 标记。
+  // 这条覆盖 router 与 backup-module 的接缝，单侧单测无法发现。
+  test('真实 backup 模块：超限文件在 handled_by 留有 too_large 标记', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-rb-real-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const mediaRepo = new MediaFileRepository(db)
+      const whitelistRepo = new WhitelistRepository(db)
+      whitelistRepo.add('room-1', '测试群')
+
+      const backup = createBackupModule({
+        mediaRepo, whitelistRepo, log: createLogger('RB'), config: makeConfig(), dataDir: dir,
+      })
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: makeConfig(), backup,
+      })
+      // 图片消息，估算体积 200MB > 配置上限 100MB → 超限不下载
+      const oversized = fakeMsg({
+        room: () => ({ id: 'room-1', topic: async () => '测试群' }),
+        type: () => 6,
+        toFileBox: async () => ({
+          name: 'big.jpg', mediaType: 'image/jpeg',
+          size: 200 * 1024 * 1024,
+          toFile: async () => { throw new Error('should not download') },
+        }),
+      })
+      await router.handle(oversized)
+      expect(repo.findById(oversized.id)!.handled_by).toBe('backup:too_large')
+      expect(mediaRepo.countAll()).toBe(0)
       db.close()
     } finally {
       rmSync(dir, { recursive: true, force: true })

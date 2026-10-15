@@ -60,9 +60,10 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
       // 5. 备份分发（阶段 1）
       if (backup) {
         const outcome = await backup.handle(msg)
-        if (outcome.handled) {
-          repo.setHandledBy(msg.id, `backup:${outcome.reason}`)
-        }
+        // 无论成功与否都记录结果。跳过/失败的原因（too_large / error / not_media 等）
+        // 不会写 media_files 行，handled_by 是唯一审计痕迹——否则"超限被拒"与
+        // "普通文本消息"在库里完全无法区分。
+        repo.setHandledBy(msg.id, `backup:${outcome.reason}`)
       }
 
       // 后续阶段在此分发：关键词流程引擎 / AI 对话模块
