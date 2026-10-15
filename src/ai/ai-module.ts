@@ -5,6 +5,7 @@ import type { Logger } from '../utils/logger.js'
 import type { AppConfig } from '../config/config-loader.js'
 import type { UsageRepository } from '../storage/db.js'
 
+/** reason 值域：'ok' | 'blocked' | 'llm_failed' | 'throttled'（throttled 时 replied=false，调用方不写 handled_by='ai'） */
 export type AiChatResult = { replied: boolean; reason: string }
 
 export interface AiModule {
@@ -35,20 +36,62 @@ const NOOP_USAGE_REPO: Pick<UsageRepository, 'insert'> = { insert: () => {} }
  *
  * 职责：prompt 组装 → 调 LLM → 经 SafeSender 回复 → 维护记忆。
  * **不直接发消息、不自行调用安全闸门** —— 出口统一走 sender（阶段 2 收口）。
+ *
+ * 阶段 4 增量：
+ * - 节流：同一 conversationId 在 throttleSeconds 内最多 1 次（0=不节流），
+ *   被节流返回 `{replied:false, reason:'throttled'}`，不调 LLM；
+ * - prompt 硬顶：单条用户消息截断 maxPromptChars；历史窗口总字符超限
+ *   时从最新往回保留、淘汰最旧轮次；
+ * - memory.enabled=false 时不读历史也不写记忆。
  */
 export function createAiModule (deps: AiModuleDeps): AiModule {
   const { llm, memory, log, config, fallbackReply } = deps
   const usageRepo = deps.usageRepo ?? NOOP_USAGE_REPO
+  /** key = conversationId → 上次 AI 调用时间戳 */
+  const lastCallAt = new Map<string, number>()
 
   return {
     async chat (conversationId, userText, sender): Promise<AiChatResult> {
+      // 节流：窗口内第二次调用直接跳过（不调 LLM、不回复）
+      const throttleMs = (config.throttleSeconds ?? 10) * 1000
+      if (throttleMs > 0) {
+        const last = lastCallAt.get(conversationId)
+        if (last !== undefined && Date.now() - last < throttleMs) {
+          log.verbose('AI 节流中 conv=%s', conversationId)
+          return { replied: false, reason: 'throttled' }
+        }
+        lastCallAt.set(conversationId, Date.now())
+      }
+
+      // 截断用户输入（单条硬顶）
+      const maxChars = config.maxPromptChars ?? 8000
+      const trimmedText = userText.length > maxChars ? userText.slice(0, maxChars) : userText
+
       // 1. 组装 prompt：system + 窗口历史 + 本轮 user
-      const history = memory.get(conversationId)
+      const history = config.memory.enabled ? memory.get(conversationId) : []
       const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
         { role: 'system', content: config.systemPrompt },
         ...history.map(t => ({ role: t.role, content: t.content })),
-        { role: 'user', content: userText },
+        { role: 'user', content: trimmedText },
       ]
+
+      // 历史窗口总字符上限（从最新的开始往回保留，直到超限）
+      if (messages.length > 2) {
+        const historyBudget = maxChars - config.systemPrompt.length - trimmedText.length
+        if (historyBudget > 0) {
+          let used = 0
+          const kept: typeof messages = [messages[0]!]
+          for (let i = messages.length - 2; i >= 1; i--) {
+            const m = messages[i]!
+            if (used + m.content.length > historyBudget) break
+            used += m.content.length
+            kept.push(m)
+          }
+          // kept 现在是 [system, ...倒序历史]，倒回来 + 本轮 user
+          messages.length = 0
+          messages.push(kept[0]!, ...kept.slice(1).reverse(), { role: 'user' as const, content: trimmedText })
+        }
+      }
 
       // 2. 调 LLM（LlmResult 不抛错；空回复视为失败，避免发空白消息）
       const result = await llm.complete({
@@ -78,17 +121,21 @@ export function createAiModule (deps: AiModuleDeps): AiModule {
         const err = result.ok ? 'LLM 返回空内容' : result.error
         log.error('LLM 调用失败 conv=%s: %s', conversationId, err)
 
-        // 失败路径：兜底话术 + 转人工提示；只记 user 轮
-        memory.append(conversationId, { role: 'user', content: userText, at: Date.now() })
+        // 失败路径：兜底话术 + 转人工提示；只记 user 轮（memory.enabled=false 时不写）
+        if (config.memory.enabled) {
+          memory.append(conversationId, { role: 'user', content: trimmedText, at: Date.now() })
+        }
         await sender.send(`${fallbackReply}${HANDOFF_HINT}`)
         return { replied: true, reason: 'llm_failed' }
       }
 
-      // 3. 成功路径：回复 + 记忆写两轮
+      // 3. 成功路径：回复 + 记忆写两轮（memory.enabled=false 时不写）
       const sent = await sender.send(result.text)
       const now = Date.now()
-      memory.append(conversationId, { role: 'user', content: userText, at: now })
-      memory.append(conversationId, { role: 'assistant', content: result.text, at: now })
+      if (config.memory.enabled) {
+        memory.append(conversationId, { role: 'user', content: trimmedText, at: now })
+        memory.append(conversationId, { role: 'assistant', content: result.text, at: now })
+      }
       // 区分「用户看到了 AI 回复」与「回复被安全闸门拦下换成了兜底话术」——
       // 否则阶段 4 的 AI 成功率统计会被拦截事件虚增。
       return { replied: true, reason: sent ? 'ok' : 'blocked' }
