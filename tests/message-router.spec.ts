@@ -1,11 +1,13 @@
 import { describe, expect, test, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createDatabase, MessageRepository, MediaFileRepository, WhitelistRepository } from '../src/storage/db.js'
 import { createMessageRouter } from '../src/router/message-router.js'
 import { createBackupModule } from '../src/backup/backup-module.js'
+import { createFlowEngine } from '../src/flow/flow-engine.js'
 import { createLogger } from '../src/utils/logger.js'
+import { FileBox } from 'file-box'
 import type { AppConfig } from '../src/config/config-loader.js'
 
 function fakeMsg (overrides: Partial<any> = {}): any {
@@ -317,6 +319,44 @@ describe('message-router × 阶段 2（安全 + 流程）', () => {
       })
       await router.handle(msg)
       expect(run).toHaveBeenCalled()
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  // 回归（用户可见缺陷）：image 步骤必须发 FileBox，不能把本地路径当文本发出去。
+  // wechaty 的 sayableToPayload 对 string 走 text 分支 —— 直接传路径会让用户
+  // 收到一条内容为 "/path/x.png" 的文字消息，而不是图片。
+  test('image 步骤发送 FileBox 而非路径字符串', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-p2-img-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      // FileBox.fromFile 会 stat 文件 —— 必须真存在（这本身就是正确的生产行为：
+      // 配置了不存在的图片路径应当报错，而不是静默发出垃圾）
+      const imgPath = join(dir, 'pic.png')
+      writeFileSync(imgPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+      const cfg = {
+        ...makeConfig(),
+        flows: [{
+          name: '发图', trigger: '看图', scope: 'both' as const, enabled: true,
+          steps: [{ type: 'image' as const, path: imgPath }],
+        }],
+      }
+      const sent: any[] = []
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: cfg, safetyGate: passGate as any,
+        flowEngine: createFlowEngine({ safetyGate: passGate as any, log: createLogger('F') }),
+      })
+      const msg = fakeMsg({
+        text: () => '看图',
+        send: async (s: any) => { sent.push(s) },
+        say: async (s: any) => { sent.push(s) },
+      })
+      await router.handle(msg)
+      expect(sent).toHaveLength(1)
+      // 关键断言：绝不能是字符串（那会被当文本发出）
+      expect(typeof sent[0]).not.toBe('string')
+      expect(FileBox.valid(sent[0])).toBe(true)
       db.close()
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })

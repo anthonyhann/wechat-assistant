@@ -145,13 +145,26 @@ grep -rn "\.say(" src/ tests/ | grep -v node_modules
 输出：
 
 ```
-src/router/message-router.ts:109:              reply: async (t: string) => { await msg.say(t) },
-src/router/message-router.ts:110:              sayImage: async (p: string) => { await msg.say(p) },
+src/router/message-router.ts:112:              reply: async (t: string) => { await msg.say(t) },
+src/router/message-router.ts:115:              sayImage: async (p: string) => { await msg.say(FileBox.fromFile(p)) },
 ```
 
 ✅ 全仓库**只有这两处** `msg.say` 调用点，且都在 `FlowContext.reply` / `FlowContext.sayImage`
-回调内部 —— 这两个回调只被 `flowEngine.run` 调用，而 `flowEngine` 内所有文本出口都先过
-`safetyGate.checkOutbound`。**不存在绕过闸门的 `msg.say` 调用路径。**
+回调内部 —— 这两个回调只被 `flowEngine.run` 调用，而 `flowEngine` 内所有**文本**出口都先过
+`safetyGate.checkOutbound`。**文本出口不存在绕过闸门的路径。**
+
+### 6.1 两处非文本/非闸门出口（明确记录，避免被读成"全都过了闸门"）
+
+1. **`image` 步骤不走文本闸门** —— 图片是二进制，路径来自 `config/flows.json`（非用户输入），
+   设计上不适用文本词库。**注意**：此路径曾存在一个真实缺陷——`msg.say(路径字符串)` 会被
+   wechaty 的 `sayableToPayload` 按 `typeof === 'string'` 判为**文本**，导致用户收到一条
+   内容为 `/path/x.png` 的文字消息而非图片。已修为 `FileBox.fromFile(p)`，并新增回归测试
+   `image 步骤发送 FileBox 而非路径字符串`（变异验证：改回传字符串该用例即失败）。
+   该缺陷**单测此前结构上无法发现**（只断言 `sayImage` 被调用，不断言参数类型），
+   由终审审查指出。
+2. **入站检查只覆盖文本**（`if (safetyGate && text)`）—— 无文字说明的纯媒体消息不做入站词库扫描。
+   当前无实际影响（所有出站文本仍受闸门约束），但「媒体入站安全」在阶段 2 **未实现**，
+   不应被理解为已覆盖。
 
 ## 6. 阶段 2 验收清单
 
