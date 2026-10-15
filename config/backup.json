@@ -3,5 +3,6 @@
   "mediaTypes": ["Image", "Attachment"],
   "maxFileSizeMB": 100,
   "dedupeByHash": true,
-  "saveAllTextMessages": true
+  "saveAllTextMessages": true,
+  "timeZone": "Asia/Shanghai"
 }

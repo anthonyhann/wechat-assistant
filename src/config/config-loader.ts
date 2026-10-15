@@ -44,6 +44,8 @@ const BackupConfigSchema = z.object({
   maxFileSizeMB: z.number().positive(),
   dedupeByHash: z.boolean(),
   saveAllTextMessages: z.boolean(),
+  // 媒体目录按哪个时区分日；缺省 Asia/Shanghai，避免容器 TZ=UTC 时凌晨消息落到前一天
+  timeZone: z.string().default('Asia/Shanghai'),
 })
 
 const AiConfigSchema = z.object({
