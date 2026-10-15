@@ -54,3 +54,59 @@ export function createMockAdapter (): LlmAdapter {
     },
   }
 }
+
+export interface PostJsonOptions {
+  url: string
+  apiKey: string
+  body: Record<string, unknown>
+  timeoutMs?: number
+  fetchImpl?: typeof fetch
+}
+
+export type PostJsonResult =
+  | { ok: true; json: any }
+  | { ok: false; error: string; retryable: boolean }
+
+const DEFAULT_TIMEOUT_MS = 30_000
+
+/**
+ * POST JSON 到 OpenAI 兼容端点，统一处理超时 / 网络错 / 状态码分类。
+ *
+ * 报错信息**不含 apiKey** —— 401 时若把响应体或请求头回显进 error，
+ * key 会随日志外泄。
+ */
+export async function postJson (opts: PostJsonOptions): Promise<PostJsonResult> {
+  const { url, apiKey, body, timeoutMs = DEFAULT_TIMEOUT_MS, fetchImpl = fetch } = opts
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const res = await fetchImpl(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+
+    if (!res.ok) {
+      // 只报状态码，不回显响应体（可能含敏感信息）与 key
+      return { ok: false, error: `HTTP ${res.status}`, retryable: res.status >= 500 || res.status === 429 }
+    }
+
+    let json: any
+    try {
+      json = await res.json()
+    } catch {
+      return { ok: false, error: '响应不是合法 JSON', retryable: false }
+    }
+    return { ok: true, json }
+  } catch (e) {
+    const msg = (e as Error).name === 'AbortError' ? `请求超时（${timeoutMs}ms）` : (e as Error).message
+    return { ok: false, error: msg, retryable: true }
+  } finally {
+    clearTimeout(timer)
+  }
+}
