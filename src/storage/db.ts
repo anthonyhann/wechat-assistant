@@ -90,10 +90,23 @@ const COLUMN_MIGRATIONS: Array<{ table: string; column: string; ddl: string }> =
   { table: 'messages', column: 'ai_result', ddl: 'ALTER TABLE messages ADD COLUMN ai_result TEXT' },
 ]
 
+/**
+ * SQLite 标识符白名单。PRAGMA 不接受参数绑定，表名只能拼接，
+ * 因此在函数边界自行校验，而不是依赖"调用方传的是常量"这一外部前提。
+ */
+function assertIdentifier (name: string): void {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    throw new Error(`非法 SQL 标识符: ${name}`)
+  }
+}
+
 function migrateColumns (db: Database.Database): void {
   for (const { table, column, ddl } of COLUMN_MIGRATIONS) {
+    assertIdentifier(table)
+    assertIdentifier(column)
+
     const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
-    // 表不存在时跳过（由 DDL 负责建表）
+    // 防御性分支：正常流程中 DDL 已先建表，此分支不会触发
     if (columns.length === 0) continue
     if (!columns.some(c => c.name === column)) {
       db.exec(ddl)
@@ -159,14 +172,16 @@ export class MessageRepository {
     this.db.prepare('UPDATE messages SET handled_by = ? WHERE id = ?').run(handledBy, id)
   }
 
-  private static readonly RESULT_COLUMNS = ['backup_result', 'flow_result', 'ai_result'] as const
+  private static readonly RESULT_COLUMNS: ReadonlySet<string> = new Set(['backup_result', 'flow_result', 'ai_result'])
 
   /**
    * 更新消息的某个结果列。
    * 列名走白名单校验 —— 列名无法用参数绑定，必须防注入。
    */
   setResult (id: string, column: 'backup_result' | 'flow_result' | 'ai_result', value: string): void {
-    if (!MessageRepository.RESULT_COLUMNS.includes(column)) {
+    // 用 Set.has 而非 Array.includes：includes 是 SameValueZero 比较，
+    // 在 any/无类型 JS 调用下可能被传入对象绕过；同时显式挡住非字符串。
+    if (typeof column !== 'string' || !MessageRepository.RESULT_COLUMNS.has(column)) {
       throw new Error(`非法的结果列名: ${String(column)}`)
     }
     // 列名来自上面校验过的白名单，此处拼接安全

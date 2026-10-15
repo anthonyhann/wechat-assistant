@@ -62,6 +62,21 @@ describe('messages 结果列（阶段 2 拆分列方案）', () => {
     } finally { cleanup() }
   })
 
+  // 回归：白名单必须 fail-closed —— 非字符串输入也要被挡（includes 做对象比较时可能被绕过）
+  test('非字符串列名被拒绝', () => {
+    const { path, cleanup } = tempDb()
+    try {
+      const db = createDatabase(path)
+      const repo = new MessageRepository(db)
+      seedMessage(repo)
+      for (const bad of [null, undefined, 123, {}, []]) {
+        expect(() => repo.setResult('m1', bad as any, 'x')).toThrow()
+      }
+      expect(repo.findById('m1')).toBeDefined()
+      db.close()
+    } finally { cleanup() }
+  })
+
   test('setSafetyResult 可写', () => {
     const { path, cleanup } = tempDb()
     try {
