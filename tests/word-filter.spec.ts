@@ -94,6 +94,35 @@ describe('WordFilter.check', () => {
     const empty = new WordFilter(new Map())
     expect(empty.check('测试敏感词')).toEqual({ matched: false })
   })
+
+  // 回归（安全关键）：空词条绝不能命中一切。
+  // 若守卫 `entry.lower &&` 被移除，''.includes('') 恒真 → 闸门会拦下所有回复。
+  test('空字符串词条不会命中任何文本', () => {
+    const wf = new WordFilter(new Map([['self', ['']]]))
+    expect(wf.check('今天天气不错')).toEqual({ matched: false })
+    expect(wf.check('任意内容')).toEqual({ matched: false })
+  })
+
+  test('空白词条不会命中', () => {
+    const wf = new WordFilter(new Map([['self', ['   ', '\t']]]))
+    expect(wf.check('今天天气不错')).toEqual({ matched: false })
+  })
+
+  test('空词条存在时，同分类的正常词仍可命中', () => {
+    const wf = new WordFilter(new Map([['self', ['', '禁词']]]))
+    const r = wf.check('这里出现了禁词')
+    expect(r.matched).toBe(true)
+    if (r.matched) expect(r.word).toBe('禁词')
+  })
+
+  test('parseWordFile 不会产出空字符串词条', () => {
+    const map = parseWordFile('[a]\n\n   \n正常词\n\n[b]\n[x]\n')
+    for (const words of map.values()) {
+      expect(words.every(w => w.length > 0)).toBe(true)
+      expect(words.every(w => w.trim() === w)).toBe(true)
+    }
+    expect(map.get('a')).toEqual(['正常词'])
+  })
 })
 
 describe('makeSnippet', () => {
