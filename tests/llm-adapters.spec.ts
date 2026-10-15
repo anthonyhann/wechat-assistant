@@ -99,6 +99,30 @@ describe('OpenAI adapter', () => {
     expect(JSON.parse((fake.mock.calls[0]![1] as any).body).model).toBe('gpt-4o-mini')
   })
 
+  // 安全：log 选项存在但绝不记录 apiKey / 响应体
+  test('注入 log 时不泄露 apiKey 与响应体', async () => {
+    const lines: string[] = []
+    const fakeLog: any = new Proxy({}, {
+      get: (_t, prop: string) => (...args: any[]) => { lines.push(`${prop}: ${args.join(' ')}`) },
+    })
+    const r = await makeArk(vi.fn(async () => new Response('{"leak":"SECRET-KEY-12345"}', { status: 401 })))
+      .complete({ messages: [{ role: 'user', content: 'hi' }] })
+    expect(r.ok).toBe(false)
+
+    // 用带 log 的适配器再跑一次，检查所有日志行
+    const withLog = createArkAdapter({
+      apiKey: 'SECRET-KEY-12345', model: 'm', baseUrl: 'https://x.com',
+      fetchImpl: (async () => new Response('{"leak":"SECRET-KEY-12345"}', { status: 401 })) as any,
+      log: fakeLog,
+    })
+    await withLog.complete({ messages: [{ role: 'user', content: 'hi' }] })
+    expect(lines.length).toBeGreaterThan(0)
+    for (const line of lines) {
+      expect(line).not.toContain('SECRET-KEY-12345')
+      expect(line).not.toContain('leak')
+    }
+  })
+
   test('name 为 openai', () => {
     expect(make(vi.fn()).name).toBe('openai')
   })
