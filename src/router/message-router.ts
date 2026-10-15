@@ -57,7 +57,11 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
         text: text || null,
         timestamp: Date.now(),
         is_self: 0,
-        handled_by: 'logged',
+        // 初值留 NULL 而非 'logged'：'logged' 不在设计文档的枚举里
+        // （'backup'|'flow'|'ai'|'ignored'），若以它落库，阶段 4 用
+        // `handled_by IS NULL` 查「未处理/异常」时会一条都查不到——失败被伪装成处理过。
+        // 每条消息最终必然由下面某个分支写明责任人。
+        handled_by: null,
         safety_result: null,
         backup_result: null,
         flow_result: null,
@@ -72,6 +76,9 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
         const inbound = safetyGate.checkInbound(text, conversationId)
         if (inbound.matched) {
           repo.setSafetyResult(msg.id, 'blocked:inbound:L1')
+          // 明确写出"备份被安全闸门跳过"，否则后续审计无法区分
+          // 「被闸门拦下」与「puppet 没提供 FileBox 而失败」——两者的 backup_result 都是 NULL。
+          repo.setResult(msg.id, 'backup_result', 'skipped:inbound_blocked')
           repo.setHandledBy(msg.id, 'ignored')
           log.warn('入站敏感词命中，消息被忽略 msg=%s word=%s', msg.id, inbound.word)
           return
@@ -119,11 +126,21 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
             // reason 体现 cooldown / no_executable_steps / error 等分支 —— 阶段 4 管理台
             // 排查「为什么这条消息没回复」时需要它，丢掉就只能看到「命中了但没动静」。
             repo.setResult(msg.id, 'flow_result', `matched:${flow.name}:${runResult.reason}`)
-            if (runResult.executed) {
-              repo.setHandledBy(msg.id, 'flow')
-            }
+            // 命中流程时责任人一律写成 'flow'（包括 cooldown/error 等未成功执行的情况）：
+            // 归一化为「由流程模块负责处理」，具体结果看 flow_result。
+            // 若只在成功时写，未成功且此前未备份的消息会留下 handled_by=NULL，
+            // 与「根本没被任何模块处理」无法区分。
+            repo.setHandledBy(msg.id, 'flow')
           }
         }
+      }
+
+      // 兜底：走到这里说明消息被收下并落库、但没有任何模块认领（无备份模块、
+      // 或文本不触发流程）。标记为 'ignored' 而非留 NULL，让「无人认领」是显式状态，
+      // 阶段 4 便可直接用 `handled_by = 'ignored'` 统计，而 `handled_by IS NULL`
+      // 则专指「处理中途异常/漏写」这一异常信号。
+      if (repo.findById(msg.id)?.handled_by == null) {
+        repo.setHandledBy(msg.id, 'ignored')
       }
 
       // 后续阶段在此分发：AI 对话模块（阶段 3）
