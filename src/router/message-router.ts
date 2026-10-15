@@ -5,6 +5,7 @@ import type { BackupModule } from '../backup/backup-module.js'
 import type { SafetyGate } from '../safety/safety-gate.js'
 import type { FlowEngine } from '../flow/flow-engine.js'
 import { matchFlow } from '../flow/flow-engine.js'
+import { FileBox } from 'file-box'
 
 export interface MessageRouter {
   handle (msg: any): Promise<void>
@@ -93,8 +94,11 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
         if (isRoom) {
           try {
             mentioned = await msg.mentionSelf()
-          } catch {
+          } catch (e) {
+            // 某些 puppet 不支持 mentionSelf。视为未 @（宁可漏触发也不让整条消息处理崩掉），
+            // 但必须留痕——否则会表现为「用户 @ 了机器人却永远没响应」的静默故障。
             mentioned = false
+            log.warn('mentionSelf() 调用失败，按未 @ 处理 msg=%s: %s', msg.id, (e as Error).message)
           }
         }
 
@@ -105,9 +109,11 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
               conversationId,
               conversationType: isRoom ? 'room' : 'contact',
               isRoom,
-              // 所有对外文本统一经 sendRaw（内部已由 flowEngine 过闸门）
+              // 所有对外文本统一经 flowEngine（内部每步都过 checkOutbound 闸门）
               reply: async (t: string) => { await msg.say(t) },
-              sayImage: async (p: string) => { await msg.say(p) },
+              // 必须包成 FileBox：wechaty 的 sayableToPayload 对 string 走文字分支，
+              // 直接传路径会把 "/path/x.png" 当文本发出去（用户看到一串路径而非图片）。
+              sayImage: async (p: string) => { await msg.say(FileBox.fromFile(p)) },
             })
             // 记录命中的流程名与执行结果。
             // reason 体现 cooldown / no_executable_steps / error 等分支 —— 阶段 4 管理台
