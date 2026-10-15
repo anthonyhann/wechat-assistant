@@ -77,6 +77,24 @@ describe('prompt 截断', () => {
     expect(userMsg!.content.length).toBeLessThanOrEqual(100)
   })
 
+  // 回归：本轮消息占满预算时，历史硬顶不能失效（原 budget>0 守卫会整体跳过裁剪）
+  test('本轮消息占满预算时丢弃全部历史（不整体失效）', async () => {
+    const s = setup({ ok: true, text: 'x' }, { maxPromptChars: 200, systemPrompt: 's'.repeat(50) })
+    // 历史 10 条，每条 50 字符
+    for (let i = 0; i < 10; i++) {
+      s.memory.append('c1', { role: 'user', content: 'b'.repeat(50), at: Date.now() })
+    }
+    // 本轮 250 字符 > maxChars 200 → 截断到 200；system 50 → budget 为负
+    const longMsg = 'a'.repeat(250)
+    await s.mod.chat('c1', longMsg, s.sender)
+    const messages = s.complete.mock.calls[0]![0].messages
+    // 只剩 system + 本轮 user，无历史
+    expect(messages).toHaveLength(2)
+    expect(messages[0]!.role).toBe('system')
+    expect(messages[1]!.role).toBe('user')
+    expect(messages[1]!.content).toBe(longMsg.slice(0, 200))  // 仍被截断
+  })
+
   test('历史窗口总字符超限时淘汰最旧轮次', async () => {
     const s = setup({ ok: true, text: 'x' }, { maxPromptChars: 200, memory: { enabled: true, windowSize: 10, ttlMinutes: 30 } })
     // 手动塞入大量历史
