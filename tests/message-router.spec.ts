@@ -447,3 +447,206 @@ describe('message-router × 阶段 2（安全 + 流程）', () => {
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 })
+
+describe('message-router × 阶段 3（AI 分发）', () => {
+  const passGate = {
+    checkOutbound: (t: string) => ({ safe: true, text: t }),
+    checkInbound: () => ({ matched: false }),
+  }
+
+  test('私聊未命中流程时走 AI', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-p3-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const chat = vi.fn(async () => ({ replied: true, reason: 'ok' }))
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: makeConfig(), safetyGate: passGate as any,
+        flowEngine: { run: async () => ({ executed: false, reason: 'no_match', stepsRun: 0 }) } as any,
+        aiModule: { chat } as any,
+      })
+      const msg = fakeMsg({ text: () => '今天天气怎么样' })
+      await router.handle(msg)
+      expect(chat).toHaveBeenCalled()
+      expect(chat.mock.calls[0]![1]).toBe('今天天气怎么样')
+      const row = repo.findById(msg.id)!
+      expect(row.handled_by).toBe('ai')
+      expect(row.ai_result).toBe('ok')
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('群内未 @ 时不走 AI', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-p3-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const chat = vi.fn(async () => ({ replied: true, reason: 'ok' }))
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: makeConfig(), safetyGate: passGate as any,
+        flowEngine: { run: async () => ({ executed: false, reason: 'no_match', stepsRun: 0 }) } as any,
+        aiModule: { chat } as any,
+      })
+      const msg = fakeMsg({
+        text: () => '群里闲聊',
+        room: () => ({ id: 'room-1', topic: async () => 'g' }),
+        mentionSelf: async () => false,
+      })
+      await router.handle(msg)
+      expect(chat).not.toHaveBeenCalled()
+      expect(repo.findById(msg.id)!.handled_by).toBe('ignored')
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('群内已 @ 且未命中流程时走 AI，且传 mentionText（剥离 @ 前缀）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-p3-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const chat = vi.fn(async () => ({ replied: true, reason: 'ok' }))
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: makeConfig(), safetyGate: passGate as any,
+        flowEngine: { run: async () => ({ executed: false, reason: 'no_match', stepsRun: 0 }) } as any,
+        aiModule: { chat } as any,
+      })
+      const msg = fakeMsg({
+        text: () => '@机器人 今天天气怎么样',
+        mentionText: async () => '今天天气怎么样',
+        room: () => ({ id: 'room-1', topic: async () => 'g' }),
+        mentionSelf: async () => true,
+      })
+      await router.handle(msg)
+      expect(chat).toHaveBeenCalled()
+      expect(chat.mock.calls[0]![1]).toBe('今天天气怎么样')
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('mentionText 抛错时回退用 text()', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-p3-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const chat = vi.fn(async () => ({ replied: true, reason: 'ok' }))
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: makeConfig(), safetyGate: passGate as any,
+        flowEngine: { run: async () => ({ executed: false, reason: 'no_match', stepsRun: 0 }) } as any,
+        aiModule: { chat } as any,
+      })
+      const msg = fakeMsg({
+        text: () => '@机器人 你好',
+        mentionText: async () => { throw new Error('not supported') },
+        room: () => ({ id: 'room-1', topic: async () => 'g' }),
+        mentionSelf: async () => true,
+      })
+      await router.handle(msg)
+      expect(chat.mock.calls[0]![1]).toBe('@机器人 你好')
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('流程命中时不走 AI（互斥）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-p3-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const chat = vi.fn(async () => ({ replied: true, reason: 'ok' }))
+      const cfg = {
+        ...makeConfig(),
+        flows: [{ name: 'F', trigger: '活动', scope: 'both' as const, enabled: true, steps: [{ type: 'say' as const, content: 'x' }] }],
+      }
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: cfg, safetyGate: passGate as any,
+        flowEngine: { run: async () => ({ executed: true, reason: 'ok', stepsRun: 1 }) } as any,
+        aiModule: { chat } as any,
+      })
+      const msg = fakeMsg({ text: () => '有什么活动' })
+      await router.handle(msg)
+      expect(chat).not.toHaveBeenCalled()
+      expect(repo.findById(msg.id)!.handled_by).toBe('flow')
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('流程命中但未执行（冷却）时走 AI', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-p3-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const chat = vi.fn(async () => ({ replied: true, reason: 'ok' }))
+      const cfg = {
+        ...makeConfig(),
+        flows: [{ name: 'F', trigger: '活动', scope: 'both' as const, enabled: true, steps: [{ type: 'say' as const, content: 'x' }] }],
+      }
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: cfg, safetyGate: passGate as any,
+        flowEngine: { run: async () => ({ executed: false, reason: 'cooldown', stepsRun: 0 }) } as any,
+        aiModule: { chat } as any,
+      })
+      const msg = fakeMsg({ text: () => '有什么活动' })
+      await router.handle(msg)
+      expect(chat).toHaveBeenCalled()
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('AI 回复失败时 ai_result 记录 llm_failed', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-p3-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: makeConfig(), safetyGate: passGate as any,
+        flowEngine: { run: async () => ({ executed: false, reason: 'no_match', stepsRun: 0 }) } as any,
+        aiModule: { chat: async () => ({ replied: true, reason: 'llm_failed' }) } as any,
+      })
+      const msg = fakeMsg({ text: () => 'hi' })
+      await router.handle(msg)
+      const row = repo.findById(msg.id)!
+      expect(row.ai_result).toBe('llm_failed')
+      expect(row.handled_by).toBe('ai')
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('入站敏感命中时不走 AI', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-p3-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const chat = vi.fn(async () => ({ replied: true, reason: 'ok' }))
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: makeConfig(),
+        safetyGate: {
+          checkOutbound: (t: string) => ({ safe: true, text: t }),
+          checkInbound: () => ({ matched: true, category: 'political', word: 'w' }),
+        } as any,
+        flowEngine: { run: async () => ({ executed: false, reason: 'no_match', stepsRun: 0 }) } as any,
+        aiModule: { chat } as any,
+      })
+      const msg = fakeMsg({ text: () => '敏感内容' })
+      await router.handle(msg)
+      expect(chat).not.toHaveBeenCalled()
+      expect(repo.findById(msg.id)!.handled_by).toBe('ignored')
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('aiModule 抛错时消息仍已落库（bot 层兜底）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-p3-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: makeConfig(), safetyGate: passGate as any,
+        flowEngine: { run: async () => ({ executed: false, reason: 'no_match', stepsRun: 0 }) } as any,
+        aiModule: { chat: async () => { throw new Error('send failed') } } as any,
+      })
+      const msg = fakeMsg({ text: () => 'hi' })
+      await expect(router.handle(msg)).rejects.toThrow('send failed')
+      expect(repo.findById(msg.id)).toBeDefined()
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})

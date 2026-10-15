@@ -4,6 +4,7 @@ import type { AppConfig } from '../config/config-loader.js'
 import type { BackupModule } from '../backup/backup-module.js'
 import type { SafetyGate } from '../safety/safety-gate.js'
 import type { FlowEngine } from '../flow/flow-engine.js'
+import type { AiModule } from '../ai/ai-module.js'
 import { matchFlow } from '../flow/flow-engine.js'
 import { createSafeSender } from '../safety/safe-sender.js'
 
@@ -18,14 +19,16 @@ export interface RouterDeps {
   backup?: BackupModule
   safetyGate?: SafetyGate
   flowEngine?: FlowEngine
+  aiModule?: AiModule
 }
 
 /**
  * 消息路由中枢。
- * 阶段 2：过滤 → 落库 → 入站安全 → 备份 → 关键词流程。AI 在阶段 3 接入。
+ * 阶段 2：过滤 → 落库 → 入站安全 → 备份 → 关键词流程。
+ * 阶段 3：流程未处理时按触发策略分发 AI 对话（与流程互斥）。
  */
 export function createMessageRouter (deps: RouterDeps): MessageRouter {
-  const { repo, log, config, backup, safetyGate, flowEngine } = deps
+  const { repo, log, config, backup, safetyGate, flowEngine, aiModule } = deps
 
   return {
     async handle (msg) {
@@ -95,6 +98,7 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
       // 6. 关键词流程（阶段 2）
       // flowEngine 与 safetyGate 必须同时存在：发送通道 SafeSender 内含闸门，
       // 缺闸门就不允许创建 sender（宁可流程不跑，也不能出现无闸门的出口）。
+      let flowHandled = false
       if (flowEngine && safetyGate && text) {
         const isRoom = Boolean(room)
 
@@ -133,7 +137,46 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
             // 若只在成功时写，未成功且此前未备份的消息会留下 handled_by=NULL，
             // 与「根本没被任何模块处理」无法区分。
             repo.setHandledBy(msg.id, 'flow')
+            // 互斥只针对「命中并执行」的流程（用户确认）。命中但未执行
+            // （cooldown / no_executable_steps / error）时流程没有产出任何回复，
+            // 此时不放行 AI 会让用户 @ 机器人却毫无响应——表现为静默故障。
+            flowHandled = runResult.executed
           }
+        }
+      }
+
+      // 7. AI 对话（阶段 3）
+      // 触发条件（用户确认）：流程未处理 + (私聊 OR 群内已 @)
+      // 与流程互斥：流程命中就不再走 AI，避免「活动」类指令同时收到话术 + AI 回复。
+      if (aiModule && safetyGate && text && !flowHandled) {
+        const isRoom = Boolean(room)
+        let shouldChat = !isRoom
+
+        if (isRoom) {
+          try {
+            shouldChat = await msg.mentionSelf()
+          } catch (e) {
+            shouldChat = false
+            log.warn('mentionSelf() 调用失败，AI 不触发 msg=%s: %s', msg.id, (e as Error).message)
+          }
+        }
+
+        if (shouldChat) {
+          // 群内消息形如「@机器人 今天天气」——必须剥离 @ 前缀再给 LLM，
+          // 否则模型会看到无意义的 @ 文本。
+          let promptText = text
+          if (isRoom && typeof msg.mentionText === 'function') {
+            try {
+              promptText = await msg.mentionText()
+            } catch {
+              promptText = text
+            }
+          }
+
+          const sender = createSafeSender({ target: msg, safetyGate, log, conversationId })
+          const aiResult = await aiModule.chat(conversationId, promptText, sender)
+          repo.setResult(msg.id, 'ai_result', aiResult.reason)
+          repo.setHandledBy(msg.id, 'ai')
         }
       }
 
@@ -144,8 +187,6 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
       if (repo.findById(msg.id)?.handled_by == null) {
         repo.setHandledBy(msg.id, 'ignored')
       }
-
-      // 后续阶段在此分发：AI 对话模块（阶段 3）
     },
   }
 }
