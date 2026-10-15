@@ -40,7 +40,16 @@ export function createOpenaiAdapter (opts: OpenaiAdapterOptions): LlmAdapter {
         opts.log?.warn('openai 响应畸形 model=%s', opts.model)
         return { ok: false, error: '响应缺少 choices[0].message.content', retryable: false }
       }
-      return { ok: true, text }
+      const usage = res.json?.usage
+      const result: LlmResult = { ok: true, text }
+      if (usage && typeof usage.total_tokens === 'number') {
+        result.usage = {
+          promptTokens: usage.prompt_tokens ?? 0,
+          completionTokens: usage.completion_tokens ?? 0,
+          totalTokens: usage.total_tokens,
+        }
+      }
+      return result
     },
   }
 }

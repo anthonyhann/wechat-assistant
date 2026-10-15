@@ -20,7 +20,6 @@ CREATE TABLE IF NOT EXISTS messages (
   ai_result         TEXT,
   created_at        INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id, timestamp);
 
 CREATE TABLE IF NOT EXISTS media_files (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,7 +34,6 @@ CREATE TABLE IF NOT EXISTS media_files (
   sha256      TEXT,
   created_at  INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_media_msg ON media_files(message_id);
 
 CREATE TABLE IF NOT EXISTS whitelist_rooms (
   room_id    TEXT PRIMARY KEY,
@@ -72,7 +70,46 @@ CREATE TABLE IF NOT EXISTS conversations (
   content         TEXT NOT NULL,
   created_at      INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS usage_logs (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id  TEXT NOT NULL,
+  provider         TEXT NOT NULL,
+  model            TEXT NOT NULL,
+  prompt_tokens    INTEGER,
+  completion_tokens INTEGER,
+  total_tokens     INTEGER,
+  ok               INTEGER NOT NULL,
+  error            TEXT,
+  created_at       INTEGER NOT NULL
+);
 `
+
+/**
+ * 索引清单与表 DDL 分开执行：老库的既有表可能缺列（如极旧的 messages 表只有 id），
+ * `CREATE INDEX ON messages(conversation_id, ...)` 会报 "no such column" 而中断 exec，
+ * 导致排在其后的新表（usage_logs）根本没建出来。
+ *
+ * 索引只影响查询性能、不影响正确性 —— 逐条建，某条因老库缺列失败就跳过，
+ * 不阻塞库打开与其余索引/表的落地。
+ */
+const INDEX_DDL = [
+  'CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id, timestamp)',
+  'CREATE INDEX IF NOT EXISTS idx_media_msg ON media_files(message_id)',
+  'CREATE INDEX IF NOT EXISTS idx_usage_conv ON usage_logs(conversation_id, created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_logs(created_at)',
+]
+
+function migrateIndexes (db: Database.Database): void {
+  for (const ddl of INDEX_DDL) {
+    try {
+      db.exec(ddl)
+    } catch (e) {
+      if (!(e instanceof Error) || !e.message.includes('no such column')) throw e
+      // 老库缺列：跳过该索引（性能降级，功能不受影响）
+    }
+  }
+}
 
 /**
  * 幂等列补齐。
@@ -123,6 +160,7 @@ export function createDatabase (dbPath: string): Database.Database {
   db.pragma('foreign_keys = ON')
   db.exec(DDL)
   migrateColumns(db)
+  migrateIndexes(db)
   return db
 }
 
@@ -321,5 +359,56 @@ export class ConversationRepository {
     return this.db.prepare(
       'SELECT * FROM conversations WHERE conversation_id = ? ORDER BY created_at DESC, id DESC LIMIT ?',
     ).all(conversationId, limit) as ConversationRow[]
+  }
+}
+
+export interface UsageLogRow {
+  id?: number
+  conversation_id: string
+  provider: string
+  model: string
+  prompt_tokens: number | null
+  completion_tokens: number | null
+  total_tokens: number | null
+  ok: number
+  error: string | null
+  created_at: number
+}
+
+export class UsageRepository {
+  constructor (private readonly db: Database.Database) {}
+
+  insert (row: Omit<UsageLogRow, 'id'>): void {
+    this.db.prepare(`
+      INSERT INTO usage_logs (conversation_id, provider, model,
+        prompt_tokens, completion_tokens, total_tokens, ok, error, created_at)
+      VALUES (@conversation_id, @provider, @model,
+        @prompt_tokens, @completion_tokens, @total_tokens, @ok, @error, @created_at)
+    `).run(row)
+  }
+
+  todayStats (): { calls: number; promptTokens: number; completionTokens: number; totalTokens: number } {
+    const todayStart = new Date()
+    todayStart.setHours(0, 0, 0, 0)
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS calls,
+        COALESCE(SUM(prompt_tokens), 0) AS promptTokens,
+        COALESCE(SUM(completion_tokens), 0) AS completionTokens,
+        COALESCE(SUM(total_tokens), 0) AS totalTokens
+      FROM usage_logs WHERE created_at >= ?
+    `).get(todayStart.getTime()) as { calls: number; promptTokens: number; completionTokens: number; totalTokens: number }
+    return row
+  }
+
+  statsByDay (days: number): Array<{ day: string; calls: number; totalTokens: number }> {
+    const cutoff = Date.now() - days * 24 * 3600 * 1000
+    return this.db.prepare(`
+      SELECT date(created_at / 1000, 'unixepoch', 'localtime') AS day,
+        COUNT(*) AS calls,
+        COALESCE(SUM(total_tokens), 0) AS totalTokens
+      FROM usage_logs
+      WHERE created_at >= ?
+      GROUP BY day ORDER BY day DESC
+    `).all(cutoff) as Array<{ day: string; calls: number; totalTokens: number }>
   }
 }
