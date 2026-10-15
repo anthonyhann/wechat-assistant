@@ -10,7 +10,7 @@ function tempDb (): { path: string; cleanup: () => void } {
 }
 
 describe('SQLite 存储层', () => {
-  test('建表：6 张表全部存在', () => {
+  test('建表：7 张表全部存在', () => {
     const { path, cleanup } = tempDb()
     try {
       const db = createDatabase(path)
