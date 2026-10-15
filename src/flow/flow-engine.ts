@@ -1,0 +1,124 @@
+import type { FlowConfig } from '../config/config-loader.js'
+import type { Logger } from '../utils/logger.js'
+import type { SafetyGate } from '../safety/safety-gate.js'
+
+export type ReplyFn = (text: string) => Promise<void>
+export type SayImageFn = (filePath: string) => Promise<void>
+
+export interface FlowContext {
+  conversationId: string
+  conversationType: 'contact' | 'room'
+  isRoom: boolean
+  reply: ReplyFn
+  sayImage: SayImageFn
+}
+
+export type FlowRunResult = { executed: boolean; reason: string; stepsRun: number }
+
+export interface FlowEngine {
+  run (flow: FlowConfig, ctx: FlowContext): Promise<FlowRunResult>
+}
+
+export interface FlowEngineDeps {
+  safetyGate: SafetyGate
+  log: Logger
+  /** 群内同流程冷却秒数；0 或负数表示不冷却 */
+  cooldownSeconds?: number
+}
+
+const DEFAULT_COOLDOWN_SECONDS = 60
+const HANDOFF_REPLY = '已为您转接人工客服，请稍候'
+
+/** 编译正则；非法正则视为永不匹配（不让一条坏配置拖垮整个引擎） */
+function compileTrigger (trigger: string): RegExp | null {
+  try {
+    return new RegExp(trigger)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 找到第一条可用的流程。
+ * 按 flows 数组顺序，跳过 disabled 与 scope 不符的；命中即返回（不继续找）。
+ */
+export function matchFlow (flows: FlowConfig[], text: string, scope: 'contact' | 'room'): FlowConfig | null {
+  for (const flow of flows) {
+    if (!flow.enabled) continue
+    if (flow.scope !== 'both' && flow.scope !== scope) continue
+
+    const re = compileTrigger(flow.trigger)
+    if (!re) continue
+    if (re.test(text)) return flow
+  }
+  return null
+}
+
+/**
+ * 关键词流程引擎（阶段 2）。
+ *
+ * 所有文本出口都经 safetyGate.checkOutbound —— 包括 handoff 话术。
+ * 被拦截时发送兜底话术而非静默丢弃（L3 语义：用户总能得到回应，只是内容是安全的）。
+ */
+export function createFlowEngine (deps: FlowEngineDeps): FlowEngine {
+  const { safetyGate, log } = deps
+  const cooldownSeconds = deps.cooldownSeconds ?? DEFAULT_COOLDOWN_SECONDS
+  /** key = `${conversationId}:${flowName}` → 上次触发时间戳(ms) */
+  const lastRunAt = new Map<string, number>()
+
+  return {
+    async run (flow, ctx): Promise<FlowRunResult> {
+      // 冷却检查（群维度；私聊不冷却）
+      if (cooldownSeconds > 0 && ctx.isRoom) {
+        const key = `${ctx.conversationId}:${flow.name}`
+        const last = lastRunAt.get(key)
+        const now = Date.now()
+        if (last !== undefined && now - last < cooldownSeconds * 1000) {
+          log.verbose('流程冷却中，跳过 %s @ %s', flow.name, ctx.conversationId)
+          return { executed: false, reason: 'cooldown', stepsRun: 0 }
+        }
+        lastRunAt.set(key, now)
+      }
+
+      let stepsRun = 0
+
+      try {
+        for (const step of flow.steps) {
+          switch (step.type) {
+            case 'say': {
+              const verdict = safetyGate.checkOutbound(step.content, ctx.conversationId)
+              await ctx.reply(verdict.text)
+              break
+            }
+
+            case 'handoff': {
+              const verdict = safetyGate.checkOutbound(HANDOFF_REPLY, ctx.conversationId)
+              await ctx.reply(verdict.text)
+              log.info('转人工 handoff channel=%s conv=%s', step.channel, ctx.conversationId)
+              break
+            }
+
+            case 'image': {
+              // 图片来自配置路径，非用户输入，不经文本闸门
+              await ctx.sayImage(step.path)
+              break
+            }
+
+            case 'http': {
+              // 阶段 2 不实现：外部调用需要超时/重试/错误策略，属独立工作量。
+              // 显式记录并继续，不静默吞掉配置意图。
+              log.warn('http 动作尚未实现，已跳过 url=%s（流程 %s）', step.url, flow.name)
+              continue
+            }
+          }
+          stepsRun++
+        }
+
+        return { executed: true, reason: 'ok', stepsRun }
+      } catch (e) {
+        log.error('流程执行失败 %s: %s', flow.name, (e as Error).message)
+        return { executed: false, reason: 'error', stepsRun }
+      }
+    },
+  }
+}
