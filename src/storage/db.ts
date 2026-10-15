@@ -298,3 +298,28 @@ export class SafetyLogRepository {
     return row.c
   }
 }
+
+export interface ConversationRow {
+  id: number
+  conversation_id: string
+  role: string
+  content: string
+  created_at: number
+}
+
+export class ConversationRepository {
+  constructor (private readonly db: Database.Database) {}
+
+  insert (row: { conversation_id: string; role: string; content: string; created_at: number }): void {
+    this.db.prepare(`
+      INSERT INTO conversations (conversation_id, role, content, created_at)
+      VALUES (@conversation_id, @role, @content, @created_at)
+    `).run(row)
+  }
+
+  recentByConversation (conversationId: string, limit: number): ConversationRow[] {
+    return this.db.prepare(
+      'SELECT * FROM conversations WHERE conversation_id = ? ORDER BY created_at DESC, id DESC LIMIT ?',
+    ).all(conversationId, limit) as ConversationRow[]
+  }
+}
