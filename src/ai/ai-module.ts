@@ -90,6 +90,15 @@ export function createAiModule (deps: AiModuleDeps): AiModule {
           // kept 现在是 [system, ...倒序历史]，倒回来 + 本轮 user
           messages.length = 0
           messages.push(kept[0]!, ...kept.slice(1).reverse(), { role: 'user' as const, content: trimmedText })
+        } else {
+          // 本轮消息已占满预算 → 丢弃全部历史，只留 system + 本轮。
+          // 否则「历史原样全进」会让硬顶名存实亡（长文 + 长历史 → 80k+ 字符）。
+          log.warn('本轮消息已占满 prompt 预算，丢弃全部历史 conv=%s', conversationId)
+          messages.length = 0
+          messages.push(
+            { role: 'system', content: config.systemPrompt },
+            { role: 'user', content: trimmedText },
+          )
         }
       }
 
