@@ -181,4 +181,44 @@ describe('backup-module', () => {
       expect(s.mediaRepo.countAll()).toBe(0)
     } finally { s.cleanup() }
   })
+
+  // 回归：puppet 层可能 throw 非 Error（字符串），不能让诊断信息变成 undefined
+  test('抛出非 Error 值也能返回 error 且不崩', async () => {
+    const s = setup()
+    try {
+      s.whitelistRepo.add('room-1', '测试群')
+      const msg = fakeMediaMsg()
+      msg.toFileBox = async () => { throw 'string-throw-from-puppet' }
+      const outcome = await s.mod.handle(msg)
+      expect(outcome).toEqual({ handled: false, reason: 'error' })
+    } finally { s.cleanup() }
+  })
+
+  // 回归：落盘中途失败不能留下无 DB 记录引用的半截文件
+  test('落盘失败时清理半截文件', async () => {
+    const s = setup()
+    try {
+      s.whitelistRepo.add('room-1', '测试群')
+      const msg = fakeMediaMsg()
+      msg.toFileBox = async () => ({
+        name: 'x.jpg',
+        mediaType: 'image/jpeg',
+        size: null,
+        toFile: async (dest: string) => {
+          writeFileSync(dest, 'partial')      // 先写一半
+          throw new Error('network died')     // 再失败
+        },
+      })
+      const outcome = await s.mod.handle(msg)
+      expect(outcome).toEqual({ handled: false, reason: 'error' })
+      expect(s.mediaRepo.countAll()).toBe(0)
+      // 半截文件已被清理：media 目录下不应有 .jpg 残留
+      const mediaDir = join(s.dir, 'media', 'room-1')
+      if (existsSync(mediaDir)) {
+        const leftovers = (readdirSync(mediaDir, { recursive: true }) as string[])
+          .filter(f => String(f).endsWith('.jpg'))
+        expect(leftovers).toHaveLength(0)
+      }
+    } finally { s.cleanup() }
+  })
 })

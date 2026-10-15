@@ -1,5 +1,5 @@
 import { existsSync, unlinkSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, relative } from 'node:path'
 import type { MediaFileRepository, WhitelistRepository } from '../storage/db.js'
 import type { Logger } from '../utils/logger.js'
 import type { AppConfig } from '../config/config-loader.js'
@@ -20,6 +20,15 @@ export interface BackupDeps {
 }
 
 const MEDIA_TYPE_NAMES: Record<number, string> = { 6: 'Image', 8: 'Attachment' }
+
+/**
+ * 取错误信息。不假设 throw 的是 Error——puppet 层可能抛出字符串，
+ * 直接读 `.message` 会得到 undefined 而丢掉诊断信息。
+ */
+function errMsg (e: unknown): string {
+  if (e instanceof Error) return e.message
+  return String(e)
+}
 
 /**
  * 消息备份模块（阶段 1）。
@@ -51,7 +60,7 @@ export function createBackupModule (deps: BackupDeps): BackupModule {
         try {
           fileBox = await msg.toFileBox()
         } catch (e) {
-          log.error('获取 FileBox 失败 msg=%s: %s', msg.id, (e as Error).message)
+          log.error('获取 FileBox 失败 msg=%s: %s', msg.id, errMsg(e))
           return { handled: false, reason: 'error' }
         }
 
@@ -73,7 +82,11 @@ export function createBackupModule (deps: BackupDeps): BackupModule {
         try {
           await fileBox.toFile(targetPath, true)
         } catch (e) {
-          log.error('媒体落盘失败 msg=%s: %s', msg.id, (e as Error).message)
+          log.error('媒体落盘失败 msg=%s: %s', msg.id, errMsg(e))
+          // 清理可能写了一半的残留文件（无 DB 记录引用它）
+          if (existsSync(targetPath)) {
+            try { unlinkSync(targetPath) } catch { /* 清理失败不影响主流程 */ }
+          }
           return { handled: false, reason: 'error' }
         }
 
@@ -109,9 +122,8 @@ export function createBackupModule (deps: BackupDeps): BackupModule {
           }
         }
 
-        const relPath = targetPath.startsWith(dataDir)
-          ? targetPath.slice(dataDir.length).replace(/^[/\\]/, '')
-          : targetPath
+        // 用 path.relative 而非 startsWith：避免 dataDir='/x/com' 与 '/x/comdata' 的前缀误判
+        const relPath = relative(dataDir, targetPath)
 
         mediaRepo.insert({
           message_id: msg.id,
@@ -130,7 +142,7 @@ export function createBackupModule (deps: BackupDeps): BackupModule {
         return { handled: true, reason: 'backed_up' }
       } catch (e) {
         // 兜底：任何未预期错误都不能中断消息处理主流程
-        log.error('备份处理异常 msg=%s: %s', msg?.id, (e as Error).message)
+        log.error('备份处理异常 msg=%s: %s', msg?.id, errMsg(e))
         return { handled: false, reason: 'error' }
       }
     },
