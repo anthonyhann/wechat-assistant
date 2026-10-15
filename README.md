@@ -35,6 +35,10 @@ docker build -t wechat-assistant .
 docker run -v $(pwd)/data:/app/data -v $(pwd)/config:/app/config -v $(pwd)/.env:/app/.env wechat-assistant
 ```
 
+> **注意**：管理台只绑容器内的 `127.0.0.1`，`-p 3000:3000` 端口映射**无法**从宿主机访问
+> （回环绑定 × 容器网络命名空间）。容器内访问用 `docker exec -it <container> wget -qO- http://127.0.0.1:3000/api/stats`，
+> 或改为宿主机直连部署 / SSH 隧道。
+
 ## 运维
 
 - 数据保留：默认 30 天，启动时自动清理
