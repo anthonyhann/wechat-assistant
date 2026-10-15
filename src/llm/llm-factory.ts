@@ -22,7 +22,7 @@ export interface LlmFactoryOptions {
  * **降级后的 mock 返回「不可用」而非回显占位文本**（`degraded: true`）：
  * 普通 mock 是开发期主动选择的模式，回显内容便于调试；而 key 缺失是**配置事故**，
  * 此时若把 `[mock] 收到：…` 发进真实微信群，等于把内部调试标记暴露给用户。
- * 故降级 mock 一律返回失败，让上层走「兜底话术 + 转人工提示」的正常降级路径。
+ * 故降级 mock 一律返回失败（name 为 mock-degraded），让上层走「兜底话术 + 转人工提示」的正常降级路径。
  */
 export function createLlmAdapter (opts: LlmFactoryOptions): LlmAdapter {
   const { config, log } = opts
@@ -45,7 +45,9 @@ export function createLlmAdapter (opts: LlmFactoryOptions): LlmAdapter {
 
   if (config.provider === 'ark') {
     const apiKey = env[config.ark.apiKeyEnv]
-    if (!apiKey) return degradedMock('ark', config.ark.apiKeyEnv)
+    // trim：空白串等同未设置。否则会拿到真适配器、每条消息打一次网络再 401，
+    // 启动时的那条明确告警就被绕过了。
+    if (!apiKey?.trim()) return degradedMock('ark', config.ark.apiKeyEnv)
     return createArkAdapter({
       apiKey, model: config.ark.model, baseUrl: config.ark.baseUrl,
       fetchImpl: opts.fetchImpl,
@@ -56,7 +58,7 @@ export function createLlmAdapter (opts: LlmFactoryOptions): LlmAdapter {
 
   // provider === 'openai'
   const apiKey = env[config.openaiCompat.apiKeyEnv]
-  if (!apiKey) return degradedMock('openai', config.openaiCompat.apiKeyEnv)
+  if (!apiKey?.trim()) return degradedMock('openai', config.openaiCompat.apiKeyEnv)
   return createOpenaiAdapter({
     apiKey, model: config.openaiCompat.model, baseUrl: config.openaiCompat.baseUrl,
     fetchImpl: opts.fetchImpl,

@@ -48,6 +48,20 @@ describe('createLlmAdapter', () => {
     expect((await adapter.complete({ messages: [{ role: 'user', content: 'hi' }] })).ok).toBe(false)
   })
 
+  test('纯空白 key 也视为缺失（避免绕过启动告警）', async () => {
+    const adapter = make({}, { ARK_API_KEY: '   ' })
+    expect(adapter.name).toBe('mock-degraded')
+    expect((await adapter.complete({ messages: [{ role: 'user', content: 'hi' }] })).ok).toBe(false)
+  })
+
+  test('openai 缺 key 时同样降级（错误信息指向 OPENAI_API_KEY）', async () => {
+    const adapter = make({ provider: 'openai' }, {})
+    expect(adapter.name).toBe('mock-degraded')
+    const r = await adapter.complete({ messages: [{ role: 'user', content: 'hi' }] })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('OPENAI_API_KEY')
+  })
+
   test('降级时走 log.error 留痕（不静默）', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const log = createLogger('FactoryWarn')
