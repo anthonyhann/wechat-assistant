@@ -151,6 +151,30 @@ describe('flowEngine.run', () => {
     expect(replies).toEqual(['后续步骤'])
   })
 
+  // 回归：失败不应占用冷却窗口。
+  // 否则一次瞬时发送失败会让用户「既没收到回复、60s 内再问也不回」。
+  test('执行失败不占用冷却窗口（可立即重试）', async () => {
+    const eng = createFlowEngine({ safetyGate: passGate, log: createLogger('FlowTest'), cooldownSeconds: 60 })
+    const failCtx = makeCtx({ reply: async () => { throw new Error('send failed') } })
+    const r1 = await eng.run(FLOWS[0]!, failCtx.ctx)
+    expect(r1.executed).toBe(false)
+    expect(r1.reason).toBe('error')
+
+    // 立即重试：应正常执行，而非被冷却挡下
+    const okCtx = makeCtx()
+    const r2 = await eng.run(FLOWS[0]!, okCtx.ctx)
+    expect(r2.executed).toBe(true)
+    expect(okCtx.replies).toHaveLength(2)
+  })
+
+  test('成功执行后才占用冷却窗口', async () => {
+    const eng = createFlowEngine({ safetyGate: passGate, log: createLogger('FlowTest'), cooldownSeconds: 60 })
+    const first = makeCtx()
+    expect((await eng.run(FLOWS[0]!, first.ctx)).executed).toBe(true)
+    const second = makeCtx()
+    expect((await eng.run(FLOWS[0]!, second.ctx)).reason).toBe('cooldown')
+  })
+
   // 回归：全部步骤都被跳过时不能报成功。
   // 否则 router 会写 handled_by='flow'，而用户根本没收到任何消息（假成功）。
   test('全部步骤被跳过时返回 no_executable_steps 而非成功', async () => {

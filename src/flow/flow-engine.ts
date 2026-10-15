@@ -69,15 +69,16 @@ export function createFlowEngine (deps: FlowEngineDeps): FlowEngine {
   return {
     async run (flow, ctx): Promise<FlowRunResult> {
       // 冷却检查（群维度；私聊不冷却）
+      const cooldownKey = `${ctx.conversationId}:${flow.name}`
       if (cooldownSeconds > 0 && ctx.isRoom) {
-        const key = `${ctx.conversationId}:${flow.name}`
-        const last = lastRunAt.get(key)
+        const last = lastRunAt.get(cooldownKey)
         const now = Date.now()
         if (last !== undefined && now - last < cooldownSeconds * 1000) {
           log.verbose('流程冷却中，跳过 %s @ %s', flow.name, ctx.conversationId)
           return { executed: false, reason: 'cooldown', stepsRun: 0 }
         }
-        lastRunAt.set(key, now)
+        // 注意：这里**不预占**冷却窗口。窗口只在真正发出至少一条消息后才写入，
+        // 否则一次瞬时发送失败会让用户「既没收到回复、60s 内再问也不回」。
       }
 
       let stepsRun = 0
@@ -121,6 +122,11 @@ export function createFlowEngine (deps: FlowEngineDeps): FlowEngine {
         if (stepsRun === 0 && skipped > 0) {
           log.warn('流程 %s 无任何可执行步骤（%d 个被跳过），不视为已处理', flow.name, skipped)
           return { executed: false, reason: 'no_executable_steps', stepsRun: 0 }
+        }
+
+        // 只有真正执行过步骤才占用冷却窗口（失败路径不占用，允许立即重试）
+        if (cooldownSeconds > 0 && ctx.isRoom && stepsRun > 0) {
+          lastRunAt.set(cooldownKey, Date.now())
         }
 
         return { executed: true, reason: 'ok', stepsRun }
