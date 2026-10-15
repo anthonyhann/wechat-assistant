@@ -74,6 +74,33 @@ CREATE TABLE IF NOT EXISTS conversations (
 );
 `
 
+/**
+ * 幂等列补齐。
+ *
+ * `CREATE TABLE IF NOT EXISTS` 对**已存在**的表不会追加新列 —— 老库升级后
+ * 新列缺失，而插入语句引用它们会直接报 "table messages has no column named ..."。
+ * 单测用的是每次新建的临时库，抓不到这个问题，只有真实长驻库会中招。
+ *
+ * 因此每次打开库时对账一遍：缺哪列补哪列。SQLite 的 ADD COLUMN 是廉价的元数据
+ * 操作，不会重写表数据。
+ */
+const COLUMN_MIGRATIONS: Array<{ table: string; column: string; ddl: string }> = [
+  { table: 'messages', column: 'backup_result', ddl: 'ALTER TABLE messages ADD COLUMN backup_result TEXT' },
+  { table: 'messages', column: 'flow_result', ddl: 'ALTER TABLE messages ADD COLUMN flow_result TEXT' },
+  { table: 'messages', column: 'ai_result', ddl: 'ALTER TABLE messages ADD COLUMN ai_result TEXT' },
+]
+
+function migrateColumns (db: Database.Database): void {
+  for (const { table, column, ddl } of COLUMN_MIGRATIONS) {
+    const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+    // 表不存在时跳过（由 DDL 负责建表）
+    if (columns.length === 0) continue
+    if (!columns.some(c => c.name === column)) {
+      db.exec(ddl)
+    }
+  }
+}
+
 export function createDatabase (dbPath: string): Database.Database {
   if (dbPath !== ':memory:') {
     mkdirSync(dirname(dbPath), { recursive: true })
@@ -82,6 +109,7 @@ export function createDatabase (dbPath: string): Database.Database {
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')
   db.exec(DDL)
+  migrateColumns(db)
   return db
 }
 

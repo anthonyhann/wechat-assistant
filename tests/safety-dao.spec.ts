@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import Database from 'better-sqlite3'
 import { createDatabase, MessageRepository, SafetyLogRepository } from '../src/storage/db.js'
 
 function tempDb () {
@@ -110,6 +111,87 @@ describe('SafetyLogRepository', () => {
       const repo = new SafetyLogRepository(db)
       expect(repo.countAll()).toBe(0)
       expect(repo.recent(10)).toEqual([])
+      db.close()
+    } finally { cleanup() }
+  })
+})
+
+// 回归（老库升级）：CREATE TABLE IF NOT EXISTS 不会给已存在的表补列。
+// 单测用新库跑，真实长驻库升级后会缺列 → 插入报 "table messages has no column named ..."。
+// 该缺陷只在「用旧库打开新代码」时出现，故必须显式构造一个旧 schema 库来测。
+describe('老库列迁移（createDatabase 幂等补齐）', () => {
+  /** 造一个「阶段 0/1 时代」的 messages 表：没有 backup_result/flow_result/ai_result */
+  function makeLegacyDb (dbPath: string): void {
+    const legacy = new Database(dbPath)
+    legacy.exec(`
+      CREATE TABLE messages (
+        id                TEXT PRIMARY KEY,
+        conversation_id   TEXT NOT NULL,
+        conversation_type TEXT NOT NULL,
+        talker_id         TEXT NOT NULL,
+        talker_name       TEXT,
+        msg_type          INTEGER NOT NULL,
+        text              TEXT,
+        timestamp         INTEGER NOT NULL,
+        is_self           INTEGER DEFAULT 0,
+        handled_by        TEXT,
+        safety_result     TEXT,
+        created_at        INTEGER NOT NULL
+      );
+    `)
+    legacy.close()
+  }
+
+  test('旧库缺列时自动补齐，且可正常插入', () => {
+    const { path, cleanup } = tempDb()
+    try {
+      makeLegacyDb(path)
+
+      // 迁移前：确认确实是旧 schema
+      const before = new Database(path)
+      const beforeCols = (before.prepare('PRAGMA table_info(messages)').all() as any[]).map(c => c.name)
+      expect(beforeCols).not.toContain('backup_result')
+      before.close()
+
+      // createDatabase 应补齐
+      const db = createDatabase(path)
+      const cols = (db.prepare('PRAGMA table_info(messages)').all() as any[]).map(c => c.name)
+      expect(cols).toContain('backup_result')
+      expect(cols).toContain('flow_result')
+      expect(cols).toContain('ai_result')
+
+      // 关键：补齐后插入不再报 no such column
+      const repo = new MessageRepository(db)
+      expect(() => seedMessage(repo, 'legacy-1')).not.toThrow()
+      expect(repo.findById('legacy-1')!.backup_result).toBeNull()
+      db.close()
+    } finally { cleanup() }
+  })
+
+  test('迁移幂等：重复打开不报错', () => {
+    const { path, cleanup } = tempDb()
+    try {
+      makeLegacyDb(path)
+      createDatabase(path).close()
+      expect(() => createDatabase(path).close()).not.toThrow()
+    } finally { cleanup() }
+  })
+
+  test('迁移保留既有数据', () => {
+    const { path, cleanup } = tempDb()
+    try {
+      makeLegacyDb(path)
+      const seed = new Database(path)
+      seed.prepare(`INSERT INTO messages (id, conversation_id, conversation_type, talker_id,
+        talker_name, msg_type, text, timestamp, is_self, handled_by, safety_result, created_at)
+        VALUES ('old-1','c1','room','t1','老张',7,'历史消息',1,0,'logged',NULL,1)`).run()
+      seed.close()
+
+      const db = createDatabase(path)
+      const row = new MessageRepository(db).findById('old-1')!
+      expect(row.text).toBe('历史消息')
+      expect(row.talker_name).toBe('老张')
+      expect(row.backup_result).toBeNull()
       db.close()
     } finally { cleanup() }
   })
