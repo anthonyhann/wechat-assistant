@@ -81,6 +81,7 @@ export function createFlowEngine (deps: FlowEngineDeps): FlowEngine {
       }
 
       let stepsRun = 0
+      let skipped = 0
 
       try {
         for (const step of flow.steps) {
@@ -108,10 +109,18 @@ export function createFlowEngine (deps: FlowEngineDeps): FlowEngine {
               // 阶段 2 不实现：外部调用需要超时/重试/错误策略，属独立工作量。
               // 显式记录并继续，不静默吞掉配置意图。
               log.warn('http 动作尚未实现，已跳过 url=%s（流程 %s）', step.url, flow.name)
+              skipped++
               continue
             }
           }
           stepsRun++
+        }
+
+        // 全部步骤都被跳过（如流程只配了 http）→ 实际什么都没发生。
+        // 不能报成功：否则 router 会写 handled_by='flow'，而用户根本没收到任何消息。
+        if (stepsRun === 0 && skipped > 0) {
+          log.warn('流程 %s 无任何可执行步骤（%d 个被跳过），不视为已处理', flow.name, skipped)
+          return { executed: false, reason: 'no_executable_steps', stepsRun: 0 }
         }
 
         return { executed: true, reason: 'ok', stepsRun }

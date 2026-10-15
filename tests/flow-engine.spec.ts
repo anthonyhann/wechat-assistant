@@ -151,6 +151,21 @@ describe('flowEngine.run', () => {
     expect(replies).toEqual(['后续步骤'])
   })
 
+  // 回归：全部步骤都被跳过时不能报成功。
+  // 否则 router 会写 handled_by='flow'，而用户根本没收到任何消息（假成功）。
+  test('全部步骤被跳过时返回 no_executable_steps 而非成功', async () => {
+    const allHttp: FlowConfig = {
+      name: '纯http流程', trigger: 'hx', scope: 'both', enabled: true,
+      steps: [{ type: 'http', url: 'https://example.com', method: 'GET' }],
+    }
+    const { ctx, replies } = makeCtx()
+    const r = await engine().run(allHttp, ctx)
+    expect(r.executed).toBe(false)
+    expect(r.reason).toBe('no_executable_steps')
+    expect(r.stepsRun).toBe(0)
+    expect(replies).toEqual([])
+  })
+
   test('reply 抛错时停止执行并返回 error', async () => {
     const failing = makeCtx({ reply: async () => { throw new Error('send failed') } })
     const r = await engine().run(FLOWS[0]!, failing.ctx)
