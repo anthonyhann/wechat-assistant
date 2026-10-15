@@ -28,12 +28,24 @@ describe('createLlmAdapter', () => {
     expect(make({ provider: 'openai' }, { OPENAI_API_KEY: 'k' }).name).toBe('openai')
   })
 
-  test('key 缺失时降级 mock 且不抛错', () => {
-    expect(make({}, {}).name).toBe('mock')
+  // 回归：降级 mock 返回「不可用」而非回显占位文本。
+  // 若沿用普通 mock，配置事故（provider=ark 忘配 key）会把 `[mock] 收到：…`
+  // 这种内部调试标记发进真实微信群。降级必须走上层的兜底话术路径。
+  test('key 缺失时降级为「不可用」适配器且不抛错', async () => {
+    const adapter = make({}, {})
+    expect(adapter.name).toBe('mock-degraded')
+    const r = await adapter.complete({ messages: [{ role: 'user', content: 'hi' }] })
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.retryable).toBe(false)
+      expect(r.error).toContain('ARK_API_KEY')
+    }
   })
 
-  test('key 为空字符串视为缺失', () => {
-    expect(make({}, { ARK_API_KEY: '' }).name).toBe('mock')
+  test('key 为空字符串视为缺失', async () => {
+    const adapter = make({}, { ARK_API_KEY: '' })
+    expect(adapter.name).toBe('mock-degraded')
+    expect((await adapter.complete({ messages: [{ role: 'user', content: 'hi' }] })).ok).toBe(false)
   })
 
   test('降级时走 log.error 留痕（不静默）', () => {
@@ -62,8 +74,10 @@ describe('createLlmAdapter', () => {
     expect(createLlmAdapter({ config: cfg, log: createLogger('T'), env: { MY_ARK_KEY: 'k' } }).name).toBe('ark')
   })
 
-  test('mock adapter 可正常完成请求', async () => {
+  // 主动选择 provider=mock（开发模式）才回显；与 key 缺失的被动降级区分开
+  test('provider=mock 时正常回显', async () => {
     const r = await make({ provider: 'mock' }, {}).complete({ messages: [{ role: 'user', content: 'hi' }] })
     expect(r.ok).toBe(true)
+    if (r.ok) expect(r.text).toBe('[mock] 收到：hi')
   })
 })
