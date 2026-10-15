@@ -109,7 +109,9 @@ describe('message-router × 备份分发', () => {
       const msg = fakeMsg()
       await router.handle(msg)
       expect(called).toEqual([msg.id])
-      expect(repo.findById(msg.id)!.handled_by).toBe('backup:backed_up')
+      // 阶段 2 起 handled_by 只写责任人，原因写进独立结果列
+      expect(repo.findById(msg.id)!.handled_by).toBe('backup')
+      expect(repo.findById(msg.id)!.backup_result).toBe('backed_up')
       db.close()
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -149,17 +151,13 @@ describe('message-router × 备份分发', () => {
     }
   })
 
-  // 回归（组合契约）：跳过/失败的原因必须落到 handled_by。
-  // 超限与失败都不写 media_files 行，handled_by 是唯一审计痕迹——
+  // 回归（组合契约）：跳过/失败的原因必须落到 backup_result。
+  // 超限与失败都不写 media_files 行，backup_result 是唯一审计痕迹——
   // 若只在 handled=true 时写入，"超限被拒"与"普通文本消息"在库里无法区分。
+  // 阶段 2 起：handled_by 固定写责任人 'backup'，原因独立成列。
   test.each([
-    ['too_large', 'backup:too_large'],
-    ['error', 'backup:error'],
-    ['not_media', 'backup:not_media'],
-    ['not_whitelisted', 'backup:not_whitelisted'],
-    ['disabled', 'backup:disabled'],
-    ['not_room', 'backup:not_room'],
-  ])('backup 返回 handled=false/reason=%s 时 handled_by 记为 %s', async (reason, expected) => {
+    ['too_large'], ['error'], ['not_media'], ['not_whitelisted'], ['disabled'], ['not_room'],
+  ])('backup 返回 handled=false/reason=%s 时 backup_result 记为 %s 且 handled_by=backup', async (reason) => {
     const dir = mkdtempSync(join(tmpdir(), 'wc-rb-'))
     try {
       const db = createDatabase(join(dir, 't.sqlite'))
@@ -170,16 +168,18 @@ describe('message-router × 备份分发', () => {
       })
       const msg = fakeMsg()
       await router.handle(msg)
-      expect(repo.findById(msg.id)!.handled_by).toBe(expected)
+      const row = repo.findById(msg.id)!
+      expect(row.handled_by).toBe('backup')
+      expect(row.backup_result).toBe(reason)
       db.close()
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  // 回归（组合契约）：真 backup 模块的超限路径，端到端验证 handled_by 标记。
+  // 回归（组合契约）：真 backup 模块的超限路径，端到端验证结果标记。
   // 这条覆盖 router 与 backup-module 的接缝，单侧单测无法发现。
-  test('真实 backup 模块：超限文件在 handled_by 留有 too_large 标记', async () => {
+  test('真实 backup 模块：超限文件留有 too_large 标记', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'wc-rb-real-'))
     try {
       const db = createDatabase(join(dir, 't.sqlite'))
@@ -205,11 +205,136 @@ describe('message-router × 备份分发', () => {
         }),
       })
       await router.handle(oversized)
-      expect(repo.findById(oversized.id)!.handled_by).toBe('backup:too_large')
+      expect(repo.findById(oversized.id)!.handled_by).toBe('backup')
+      expect(repo.findById(oversized.id)!.backup_result).toBe('too_large')
       expect(mediaRepo.countAll()).toBe(0)
       db.close()
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('message-router × 阶段 2（安全 + 流程）', () => {
+  const passGate = {
+    checkOutbound: (text: string) => ({ safe: true, text }),
+    checkInbound: () => ({ matched: false }),
+  }
+
+  test('入站敏感命中 → 不跑流程、不备份、直接终止', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-p2-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const flowRun = vi.fn(async () => ({ executed: true, reason: 'ok', stepsRun: 1 }))
+      const backupCalled = vi.fn(async () => ({ handled: true, reason: 'backed_up' }))
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: makeConfig(),
+        backup: { handle: backupCalled } as any,
+        safetyGate: {
+          checkOutbound: (t: string) => ({ safe: true, text: t }),
+          checkInbound: () => ({ matched: true, category: 'political', word: '测试敏感词' }),
+        } as any,
+        flowEngine: { run: flowRun } as any,
+      })
+      const msg = fakeMsg()
+      await router.handle(msg)
+      expect(flowRun).not.toHaveBeenCalled()
+      expect(backupCalled).not.toHaveBeenCalled()
+      const row = repo.findById(msg.id)!
+      expect(row.safety_result).toBe('blocked:inbound:L1')
+      expect(row.handled_by).toBe('ignored')
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('流程命中 → 执行并写 flow_result', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-p2-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const flow = makeConfig().flows[0] ?? {
+        name: '活动咨询', trigger: '活动', scope: 'both' as const, enabled: true,
+        steps: [{ type: 'say' as const, content: 'hi' }],
+      }
+      const cfg = { ...makeConfig(), flows: [flow] }
+      const sent: string[] = []
+      const run = vi.fn(async (_f: any, ctx: any) => {
+        await ctx.reply('回复内容'); return { executed: true, reason: 'ok', stepsRun: 1 }
+      })
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: cfg, safetyGate: passGate as any,
+        flowEngine: { run } as any,
+      })
+      const msg = fakeMsg({ text: () => '活动', say: async (t: string) => { sent.push(t) } })
+      await router.handle(msg)
+      expect(run).toHaveBeenCalled()
+      expect(sent).toEqual(['回复内容'])
+      expect(repo.findById(msg.id)!.flow_result).toBe(`matched:${flow.name}`)
+      expect(repo.findById(msg.id)!.handled_by).toBe('flow')
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('群内未 @ 机器人 → 不触发流程', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-p2-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const cfg = { ...makeConfig(), flows: [{ name: 'F', trigger: '活动', scope: 'both' as const, enabled: true, steps: [{ type: 'say' as const, content: 'x' }] }] }
+      const run = vi.fn(async () => ({ executed: true, reason: 'ok', stepsRun: 1 }))
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: cfg, safetyGate: passGate as any,
+        flowEngine: { run } as any,
+      })
+      const msg = fakeMsg({
+        text: () => '活动',
+        room: () => ({ id: 'room-1', topic: async () => 'g' }),
+        mentionSelf: () => Promise.resolve(false),
+      })
+      await router.handle(msg)
+      expect(run).not.toHaveBeenCalled()
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('群内 @ 机器人 → 触发流程', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-p2-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const cfg = { ...makeConfig(), flows: [{ name: 'F', trigger: '活动', scope: 'both' as const, enabled: true, steps: [{ type: 'say' as const, content: 'x' }] }] }
+      const run = vi.fn(async () => ({ executed: true, reason: 'ok', stepsRun: 1 }))
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: cfg, safetyGate: passGate as any,
+        flowEngine: { run } as any,
+      })
+      const msg = fakeMsg({
+        text: () => '活动',
+        room: () => ({ id: 'room-1', topic: async () => 'g' }),
+        mentionSelf: () => Promise.resolve(true),
+        say: async () => {},
+      })
+      await router.handle(msg)
+      expect(run).toHaveBeenCalled()
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('未命中流程时不做任何回复', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-p2-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const run = vi.fn(async () => ({ executed: true, reason: 'ok', stepsRun: 1 }))
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: makeConfig(), safetyGate: passGate as any,
+        flowEngine: { run } as any,
+      })
+      const msg = fakeMsg({ text: () => '完全无关的话', say: async () => { throw new Error('不应发送') } })
+      await router.handle(msg)
+      expect(run).not.toHaveBeenCalled()
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 })

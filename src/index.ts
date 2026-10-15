@@ -3,10 +3,13 @@ import 'dotenv/config'
 import { join } from 'node:path'
 import { loadConfig } from './config/config-loader.js'
 import { createLogger } from './utils/logger.js'
-import { createDatabase, MessageRepository, MediaFileRepository, WhitelistRepository } from './storage/db.js'
+import { createDatabase, MessageRepository, MediaFileRepository, WhitelistRepository, SafetyLogRepository } from './storage/db.js'
 import { createBackupModule } from './backup/backup-module.js'
 import { createBot } from './bot/bot.js'
 import { createMessageRouter } from './router/message-router.js'
+import { WordFilter } from './safety/word-filter.js'
+import { createSafetyGate } from './safety/safety-gate.js'
+import { createFlowEngine } from './flow/flow-engine.js'
 
 async function main (): Promise<void> {
   const log = createLogger('Main')
@@ -24,7 +27,15 @@ async function main (): Promise<void> {
   const dataDir = process.env['DATA_DIR'] || join(process.cwd(), 'data')
 
   const backup = createBackupModule({ mediaRepo, whitelistRepo, log, config, dataDir })
-  const router = createMessageRouter({ repo, log, config, backup })
+
+  const safetyRepo = new SafetyLogRepository(db)
+  const wordFilter = WordFilter.fromFile(
+    join(process.cwd(), 'config', config.safety.localFilter.wordFile),
+  )
+  const safetyGate = createSafetyGate({ wordFilter, safetyRepo, log, config })
+  const flowEngine = createFlowEngine({ safetyGate, log, cooldownSeconds: 60 })
+
+  const router = createMessageRouter({ repo, log, config, backup, safetyGate, flowEngine })
   const bot = createBot({ config, log, onMessage: msg => router.handle(msg) })
 
   const shutdown = async (signal: string) => {

@@ -2,6 +2,9 @@ import type { MessageRepository } from '../storage/db.js'
 import type { Logger } from '../utils/logger.js'
 import type { AppConfig } from '../config/config-loader.js'
 import type { BackupModule } from '../backup/backup-module.js'
+import type { SafetyGate } from '../safety/safety-gate.js'
+import type { FlowEngine } from '../flow/flow-engine.js'
+import { matchFlow } from '../flow/flow-engine.js'
 
 export interface MessageRouter {
   handle (msg: any): Promise<void>
@@ -12,14 +15,16 @@ export interface RouterDeps {
   log: Logger
   config: AppConfig
   backup?: BackupModule
+  safetyGate?: SafetyGate
+  flowEngine?: FlowEngine
 }
 
 /**
  * 消息路由中枢。
- * 阶段 1：过滤 + 落库 + 日志 + 备份分发。关键词流程/AI 在后续阶段接入。
+ * 阶段 2：过滤 → 落库 → 入站安全 → 备份 → 关键词流程。AI 在阶段 3 接入。
  */
 export function createMessageRouter (deps: RouterDeps): MessageRouter {
-  const { repo, log, config, backup } = deps
+  const { repo, log, config, backup, safetyGate, flowEngine } = deps
 
   return {
     async handle (msg) {
@@ -29,23 +34,26 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
         return
       }
 
-      // 2. 过滤过期消息（重启后不处理历史积压）
+      // 2. 过滤过期消息
       if (msg.age() > config.bot.trigger.maxMessageAgeSeconds) {
         log.verbose('忽略过期消息: %s (age=%ds)', msg.id, msg.age())
         return
       }
 
-      // 3. 落库（必须先于备份，保证部署失败时消息元数据不丢）
+      // 3. 落库
       const room = msg.room()
       const talker = msg.talker()
+      const conversationId = room ? room.id : talker.id
+      const text = msg.text() || ''
+
       repo.insert({
         id: msg.id,
-        conversation_id: room ? room.id : talker.id,
+        conversation_id: conversationId,
         conversation_type: room ? 'room' : 'contact',
         talker_id: talker.id,
         talker_name: talker.name(),
         msg_type: msg.type(),
-        text: msg.text() || null,
+        text: text || null,
         timestamp: Date.now(),
         is_self: 0,
         handled_by: 'logged',
@@ -56,20 +64,60 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
         created_at: Date.now(),
       })
 
-      // 4. 日志
-      const where = room ? `群[${room.id}]` : `私聊[${talker.id}]`
-      log.info('收到消息 %s 来自 %s 类型=%s', msg.id, where, msg.type())
+      log.info('收到消息 %s 来自 %s 类型=%s', msg.id, room ? `群[${room.id}]` : `私聊[${talker.id}]`, msg.type())
+
+      // 4. 入站安全：命中即终止（不回复、不跑流程、不备份）
+      if (safetyGate && text) {
+        const inbound = safetyGate.checkInbound(text, conversationId)
+        if (inbound.matched) {
+          repo.setSafetyResult(msg.id, 'blocked:inbound:L1')
+          repo.setHandledBy(msg.id, 'ignored')
+          log.warn('入站敏感词命中，消息被忽略 msg=%s word=%s', msg.id, inbound.word)
+          return
+        }
+      }
 
       // 5. 备份分发（阶段 1）
       if (backup) {
         const outcome = await backup.handle(msg)
-        // 无论成功与否都记录结果。跳过/失败的原因（too_large / error / not_media 等）
-        // 不会写 media_files 行，handled_by 是唯一审计痕迹——否则"超限被拒"与
-        // "普通文本消息"在库里完全无法区分。
-        repo.setHandledBy(msg.id, `backup:${outcome.reason}`)
+        repo.setResult(msg.id, 'backup_result', outcome.reason)
+        repo.setHandledBy(msg.id, 'backup')
       }
 
-      // 后续阶段在此分发：关键词流程引擎 / AI 对话模块
+      // 6. 关键词流程（阶段 2）
+      if (flowEngine && text) {
+        const isRoom = Boolean(room)
+
+        // 群内需 @ 机器人；私聊无需
+        let mentioned = true
+        if (isRoom) {
+          try {
+            mentioned = await msg.mentionSelf()
+          } catch {
+            mentioned = false
+          }
+        }
+
+        if (mentioned) {
+          const flow = matchFlow(config.flows, text, isRoom ? 'room' : 'contact')
+          if (flow) {
+            const runResult = await flowEngine.run(flow, {
+              conversationId,
+              conversationType: isRoom ? 'room' : 'contact',
+              isRoom,
+              // 所有对外文本统一经 sendRaw（内部已由 flowEngine 过闸门）
+              reply: async (t: string) => { await msg.say(t) },
+              sayImage: async (p: string) => { await msg.say(p) },
+            })
+            repo.setResult(msg.id, 'flow_result', `matched:${flow.name}`)
+            if (runResult.executed) {
+              repo.setHandledBy(msg.id, 'flow')
+            }
+          }
+        }
+      }
+
+      // 后续阶段在此分发：AI 对话模块（阶段 3）
     },
   }
 }
