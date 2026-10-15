@@ -18,21 +18,24 @@ const FLOWS: FlowConfig[] = [
   { name: '仅群聊', trigger: '群专用', scope: 'room', enabled: true, steps: [{ type: 'say', content: 'r' }] },
 ]
 
-/** 透传闸门：永远放行，便于隔离流程引擎行为 */
-const passGate: SafetyGate = {
-  checkOutbound: (text: string) => ({ safe: true, text }),
-  checkInbound: () => ({ matched: false }),
-}
-
+/**
+ * 假 SafeSender：记录被发送的内容。
+ * 流程引擎不再自行调用闸门 —— 闸门收口在真 SafeSender 内，此处只需 stub 发送行为。
+ */
 function makeCtx (over: Partial<any> = {}) {
   const replies: string[] = []
   const images: string[] = []
+  const files: unknown[] = []
+  const sender = {
+    send: async (t: string) => { replies.push(t); return true },
+    sendImage: async (p: string) => { images.push(p) },
+    sendFileBox: async (b: unknown) => { files.push(b) },
+  }
   return {
-    replies, images,
+    replies, images, files, sender,
     ctx: {
       conversationId: 'room-1', conversationType: 'room' as const, isRoom: true,
-      reply: async (t: string) => { replies.push(t) },
-      sayImage: async (p: string) => { images.push(p) },
+      sender,
       ...over,
     },
   }
@@ -79,7 +82,7 @@ describe('matchFlow', () => {
 })
 
 describe('flowEngine.run', () => {
-  const engine = () => createFlowEngine({ safetyGate: passGate, log: createLogger('FlowTest') })
+  const engine = () => createFlowEngine({ log: createLogger('FlowTest') })
 
   test('say 步骤按顺序发出', async () => {
     const { ctx, replies } = makeCtx()
@@ -95,19 +98,16 @@ describe('flowEngine.run', () => {
     expect(replies.some(t => t.includes('转接'))).toBe(true)
   })
 
-  test('出站被拦截时发送兜底话术（不发送原文）', async () => {
-    const blockingGate: SafetyGate = {
-      checkOutbound: (text: string) => ({ safe: false, text: '兜底', reason: 'blocked:L1:x', category: 'x', word: 'y' }),
-      checkInbound: () => ({ matched: false }),
-    }
+  // 引擎职责边界：它把配置文本原样交给 sender，**不自行判定拦截**。
+  // 拦截与兜底由 SafeSender 负责（见 tests/safe-sender.spec.ts）。
+  test('say 步骤把配置文本交给 sender（不自行改内容）', async () => {
     const { ctx, replies } = makeCtx()
-    const r = createFlowEngine({ safetyGate: blockingGate, log: createLogger('FlowTest') }).run(FLOWS[0]!, ctx)
-    await r
-    expect(replies).toEqual(['兜底', '兜底'])
+    await engine().run(FLOWS[0]!, ctx)
+    expect(replies).toEqual(['本周活动：老带新各得 20 元券～', '回复「报名」即可登记'])
   })
 
   test('冷却：同群同流程第二次被拒', async () => {
-    const eng = createFlowEngine({ safetyGate: passGate, log: createLogger('FlowTest'), cooldownSeconds: 60 })
+    const eng = createFlowEngine({ log: createLogger('FlowTest'), cooldownSeconds: 60 })
     const first = makeCtx()
     const second = makeCtx()
     expect((await eng.run(FLOWS[0]!, first.ctx)).executed).toBe(true)
@@ -117,21 +117,21 @@ describe('flowEngine.run', () => {
   })
 
   test('冷却按「群+流程」隔离：同群不同流程不受影响', async () => {
-    const eng = createFlowEngine({ safetyGate: passGate, log: createLogger('FlowTest'), cooldownSeconds: 60 })
+    const eng = createFlowEngine({ log: createLogger('FlowTest'), cooldownSeconds: 60 })
     await eng.run(FLOWS[0]!, makeCtx().ctx)
     const other = makeCtx()
     expect((await eng.run(FLOWS[1]!, other.ctx)).executed).toBe(true)
   })
 
   test('冷却按群隔离：不同群互不影响', async () => {
-    const eng = createFlowEngine({ safetyGate: passGate, log: createLogger('FlowTest'), cooldownSeconds: 60 })
+    const eng = createFlowEngine({ log: createLogger('FlowTest'), cooldownSeconds: 60 })
     await eng.run(FLOWS[0]!, makeCtx({ conversationId: 'room-A' }).ctx)
     const otherRoom = makeCtx({ conversationId: 'room-B' })
     expect((await eng.run(FLOWS[0]!, otherRoom.ctx)).executed).toBe(true)
   })
 
   test('私聊不施加冷却', async () => {
-    const eng = createFlowEngine({ safetyGate: passGate, log: createLogger('FlowTest'), cooldownSeconds: 60 })
+    const eng = createFlowEngine({ log: createLogger('FlowTest'), cooldownSeconds: 60 })
     const c1 = makeCtx({ conversationType: 'contact', isRoom: false, conversationId: 'user-1' })
     const c2 = makeCtx({ conversationType: 'contact', isRoom: false, conversationId: 'user-1' })
     expect((await eng.run(FLOWS[0]!, c1.ctx)).executed).toBe(true)
@@ -154,8 +154,8 @@ describe('flowEngine.run', () => {
   // 回归：失败不应占用冷却窗口。
   // 否则一次瞬时发送失败会让用户「既没收到回复、60s 内再问也不回」。
   test('执行失败不占用冷却窗口（可立即重试）', async () => {
-    const eng = createFlowEngine({ safetyGate: passGate, log: createLogger('FlowTest'), cooldownSeconds: 60 })
-    const failCtx = makeCtx({ reply: async () => { throw new Error('send failed') } })
+    const eng = createFlowEngine({ log: createLogger('FlowTest'), cooldownSeconds: 60 })
+    const failCtx = makeCtx({ sender: { send: async () => { throw new Error('send failed') }, sendImage: async () => {}, sendFileBox: async () => {} } })
     const r1 = await eng.run(FLOWS[0]!, failCtx.ctx)
     expect(r1.executed).toBe(false)
     expect(r1.reason).toBe('error')
@@ -168,7 +168,7 @@ describe('flowEngine.run', () => {
   })
 
   test('成功执行后才占用冷却窗口', async () => {
-    const eng = createFlowEngine({ safetyGate: passGate, log: createLogger('FlowTest'), cooldownSeconds: 60 })
+    const eng = createFlowEngine({ log: createLogger('FlowTest'), cooldownSeconds: 60 })
     const first = makeCtx()
     expect((await eng.run(FLOWS[0]!, first.ctx)).executed).toBe(true)
     const second = makeCtx()
@@ -191,7 +191,7 @@ describe('flowEngine.run', () => {
   })
 
   test('reply 抛错时停止执行并返回 error', async () => {
-    const failing = makeCtx({ reply: async () => { throw new Error('send failed') } })
+    const failing = makeCtx({ sender: { send: async () => { throw new Error('send failed') }, sendImage: async () => {}, sendFileBox: async () => {} } })
     const r = await engine().run(FLOWS[0]!, failing.ctx)
     expect(r.executed).toBe(false)
     expect(r.reason).toBe('error')

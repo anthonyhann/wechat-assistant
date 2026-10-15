@@ -1,16 +1,13 @@
 import type { FlowConfig } from '../config/config-loader.js'
 import type { Logger } from '../utils/logger.js'
-import type { SafetyGate } from '../safety/safety-gate.js'
-
-export type ReplyFn = (text: string) => Promise<void>
-export type SayImageFn = (filePath: string) => Promise<void>
+import type { SafeSender } from '../safety/safe-sender.js'
 
 export interface FlowContext {
   conversationId: string
   conversationType: 'contact' | 'room'
   isRoom: boolean
-  reply: ReplyFn
-  sayImage: SayImageFn
+  /** 唯一对外发送通道（内含安全闸门，本引擎不再自行调用闸门） */
+  sender: SafeSender
 }
 
 export type FlowRunResult = { executed: boolean; reason: string; stepsRun: number }
@@ -20,7 +17,6 @@ export interface FlowEngine {
 }
 
 export interface FlowEngineDeps {
-  safetyGate: SafetyGate
   log: Logger
   /** 群内同流程冷却秒数；0 或负数表示不冷却 */
   cooldownSeconds?: number
@@ -57,11 +53,12 @@ export function matchFlow (flows: FlowConfig[], text: string, scope: 'contact' |
 /**
  * 关键词流程引擎（阶段 2）。
  *
- * 所有文本出口都经 safetyGate.checkOutbound —— 包括 handoff 话术。
- * 被拦截时发送兜底话术而非静默丢弃（L3 语义：用户总能得到回应，只是内容是安全的）。
+ * **本引擎不直接发消息，也不自行调用安全闸门** —— 所有出口统一走 `ctx.sender`，
+ * 闸门逻辑收口在 `SafeSender` 内。这样任何调用方只要拿到了 engine 就必须先有
+ * sender，从结构上消灭「绕过闸门的 msg.say」。
  */
 export function createFlowEngine (deps: FlowEngineDeps): FlowEngine {
-  const { safetyGate, log } = deps
+  const { log } = deps
   const cooldownSeconds = deps.cooldownSeconds ?? DEFAULT_COOLDOWN_SECONDS
   /** key = `${conversationId}:${flowName}` → 上次触发时间戳(ms) */
   const lastRunAt = new Map<string, number>()
@@ -88,21 +85,19 @@ export function createFlowEngine (deps: FlowEngineDeps): FlowEngine {
         for (const step of flow.steps) {
           switch (step.type) {
             case 'say': {
-              const verdict = safetyGate.checkOutbound(step.content, ctx.conversationId)
-              await ctx.reply(verdict.text)
+              await ctx.sender.send(step.content)
               break
             }
 
             case 'handoff': {
-              const verdict = safetyGate.checkOutbound(HANDOFF_REPLY, ctx.conversationId)
-              await ctx.reply(verdict.text)
+              await ctx.sender.send(HANDOFF_REPLY)
               log.info('转人工 handoff channel=%s conv=%s', step.channel, ctx.conversationId)
               break
             }
 
             case 'image': {
               // 图片来自配置路径，非用户输入，不经文本闸门
-              await ctx.sayImage(step.path)
+              await ctx.sender.sendImage(step.path)
               break
             }
 
