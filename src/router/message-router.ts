@@ -92,7 +92,13 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
       if (backup) {
         const outcome = await backup.handle(msg)
         repo.setResult(msg.id, 'backup_result', outcome.reason)
-        repo.setHandledBy(msg.id, 'backup')
+        // 只有 backup 真正对媒体消息做了决定（备份成功/去重/超限/出错）才算认领。
+        // not_media / not_room / not_whitelisted / disabled 表示备份根本不负责这条消息
+        // ——无条件认领会让 handled_by 恒为 'backup'，'ignored' 兜底与 NULL 异常信号失效。
+        // 跳过原因仍完整保留在 backup_result 列（阶段 1 的审计诉求不受影响）。
+        if (outcome.handled || outcome.reason === 'too_large' || outcome.reason === 'error') {
+          repo.setHandledBy(msg.id, 'backup')
+        }
       }
 
       // 6. 关键词流程（阶段 2）
@@ -180,10 +186,16 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
             }
           }
 
-          const sender = createSafeSender({ target: msg, safetyGate, log, conversationId })
-          const aiResult = await aiModule.chat(conversationId, promptText, sender)
-          repo.setResult(msg.id, 'ai_result', aiResult.reason)
-          repo.setHandledBy(msg.id, 'ai')
+          // 空 prompt（如群内只发「@机器人」无正文）不调 LLM——
+          // 否则白付一次调用、给用户一个无意义回复。
+          if (!promptText.trim()) {
+            log.verbose('AI 输入为空，跳过 msg=%s', msg.id)
+          } else {
+            const sender = createSafeSender({ target: msg, safetyGate, log, conversationId })
+            const aiResult = await aiModule.chat(conversationId, promptText, sender)
+            repo.setResult(msg.id, 'ai_result', aiResult.reason)
+            repo.setHandledBy(msg.id, 'ai')
+          }
         }
       }
 

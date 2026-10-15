@@ -62,11 +62,13 @@ export function createAiModule (deps: AiModuleDeps): AiModule {
       }
 
       // 3. 成功路径：回复 + 记忆写两轮
-      await sender.send(result.text)
+      const sent = await sender.send(result.text)
       const now = Date.now()
       memory.append(conversationId, { role: 'user', content: userText, at: now })
       memory.append(conversationId, { role: 'assistant', content: result.text, at: now })
-      return { replied: true, reason: 'ok' }
+      // 区分「用户看到了 AI 回复」与「回复被安全闸门拦下换成了兜底话术」——
+      // 否则阶段 4 的 AI 成功率统计会被拦截事件虚增。
+      return { replied: true, reason: sent ? 'ok' : 'blocked' }
     },
   }
 }

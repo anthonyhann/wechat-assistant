@@ -71,6 +71,24 @@ describe('MemoryWindow', () => {
     expect(w.size()).toBe(2)
   })
 
+  // 回归：过期会话的键必须被淘汰，否则「说过一次再也不来」的会话永久占内存
+  test('全部过期的会话在 get 后被删除键（防内存泄漏）', () => {
+    const w = createMemoryWindow({ windowSize: 10, ttlMinutes: 30 })
+    const old = Date.now() - 60 * 60 * 1000
+    w.append('zombie', turn('user', 'a', old))
+    expect(w.size()).toBe(1)        // 已写入
+    expect(w.get('zombie')).toEqual([])  // 全过期
+    expect(w.size()).toBe(0)        // 键被淘汰
+  })
+
+  test('部分过期的会话保留键（不误删活跃会话）', () => {
+    const w = createMemoryWindow({ windowSize: 10, ttlMinutes: 30 })
+    w.append('active', turn('user', 'old', Date.now() - 60 * 60 * 1000))
+    w.append('active', turn('user', 'new'))
+    expect(w.get('active')).toHaveLength(1)
+    expect(w.size()).toBe(1)
+  })
+
   test('get 不改变窗口内容（幂等读取）', () => {
     const w = createMemoryWindow({ windowSize: 10, ttlMinutes: 30 })
     w.append('c1', turn('user', 'a'))

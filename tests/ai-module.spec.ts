@@ -96,6 +96,27 @@ describe('aiModule.chat 成功路径', () => {
   })
 })
 
+describe('aiModule.chat 出口被拦', () => {
+  test('回复被安全闸门拦下时 reason 记为 blocked（而非 ok）', async () => {
+    const sent: string[] = []
+    const blockingSender = {
+      send: async (t: string) => { sent.push(t); return false },
+      sendImage: async () => {}, sendFileBox: async () => {},
+    }
+    const memory = createMemoryWindow({ windowSize: 10, ttlMinutes: 30 })
+    const mod = createAiModule({
+      llm: stubAdapter({ ok: true, text: '含敏感词的回复' }), memory,
+      sender: blockingSender as any, log: createLogger('AiTest'),
+      config: AI, fallbackReply: FALLBACK,
+    })
+    const r = await mod.chat('c1', 'hi', blockingSender as any)
+    expect(r.reason).toBe('blocked')
+    expect(r.replied).toBe(true)
+    // 记忆仍记录两轮（LLM 确实生成了回复，只是出口被拦）
+    expect(memory.get('c1').map(t => t.role)).toEqual(['user', 'assistant'])
+  })
+})
+
 describe('aiModule.chat 失败路径', () => {
   test('LLM 失败时回复兜底话术', async () => {
     const s = setup({ ok: false, error: 'HTTP 500', retryable: true })
