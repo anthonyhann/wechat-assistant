@@ -118,4 +118,85 @@ export class MessageRepository {
   recent (limit: number): MessageRow[] {
     return this.db.prepare('SELECT * FROM messages ORDER BY timestamp DESC LIMIT ?').all(limit) as MessageRow[]
   }
+
+  setHandledBy (id: string, handledBy: string): void {
+    this.db.prepare('UPDATE messages SET handled_by = ? WHERE id = ?').run(handledBy, id)
+  }
+
+  findById (id: string): MessageRow | undefined {
+    return this.db.prepare('SELECT * FROM messages WHERE id = ?').get(id) as MessageRow | undefined
+  }
+}
+
+export interface MediaFileRow {
+  id?: number
+  message_id: string
+  room_id: string | null
+  talker_id: string
+  media_type: string
+  mime: string | null
+  file_name: string
+  file_path: string
+  file_size: number | null
+  sha256: string | null
+  created_at: number
+}
+
+export class MediaFileRepository {
+  constructor (private readonly db: Database.Database) {}
+
+  insert (row: MediaFileRow): void {
+    this.db.prepare(`
+      INSERT INTO media_files (message_id, room_id, talker_id, media_type, mime,
+        file_name, file_path, file_size, sha256, created_at)
+      VALUES (@message_id, @room_id, @talker_id, @media_type, @mime,
+        @file_name, @file_path, @file_size, @sha256, @created_at)
+    `).run({
+      message_id: row.message_id,
+      room_id: row.room_id,
+      talker_id: row.talker_id,
+      media_type: row.media_type,
+      mime: row.mime,
+      file_name: row.file_name,
+      file_path: row.file_path,
+      file_size: row.file_size,
+      sha256: row.sha256,
+      created_at: row.created_at,
+    })
+  }
+
+  findBySha256 (sha256: string): MediaFileRow | undefined {
+    return this.db.prepare('SELECT * FROM media_files WHERE sha256 = ? LIMIT 1').get(sha256) as MediaFileRow | undefined
+  }
+
+  countAll (): number {
+    const row = this.db.prepare('SELECT COUNT(*) AS c FROM media_files').get() as { c: number }
+    return row.c
+  }
+}
+
+export class WhitelistRepository {
+  constructor (private readonly db: Database.Database) {}
+
+  add (roomId: string, roomName: string | null): void {
+    this.db.prepare(`
+      INSERT INTO whitelist_rooms (room_id, room_name, enabled, updated_at)
+      VALUES (?, ?, 1, ?)
+      ON CONFLICT(room_id) DO UPDATE SET room_name = excluded.room_name,
+        enabled = 1, updated_at = excluded.updated_at
+    `).run(roomId, roomName, Date.now())
+  }
+
+  isEnabled (roomId: string): boolean {
+    const row = this.db.prepare('SELECT enabled FROM whitelist_rooms WHERE room_id = ?').get(roomId) as { enabled: number } | undefined
+    return row?.enabled === 1
+  }
+
+  list (): Array<{ room_id: string; room_name: string | null; enabled: number }> {
+    return this.db.prepare('SELECT room_id, room_name, enabled FROM whitelist_rooms ORDER BY room_id').all() as Array<{ room_id: string; room_name: string | null; enabled: number }>
+  }
+
+  remove (roomId: string): void {
+    this.db.prepare('DELETE FROM whitelist_rooms WHERE room_id = ?').run(roomId)
+  }
 }
