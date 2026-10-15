@@ -22,7 +22,7 @@ export interface LlmRequest {
  * （参数错 / 鉴权失败 / 内容违规）。
  */
 export type LlmResult =
-  | { ok: true; text: string }
+  | { ok: true; text: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } }
   | { ok: false; error: string; retryable: boolean }
 
 export interface LlmAdapter {
@@ -50,7 +50,7 @@ export function createMockAdapter (): LlmAdapter {
       if (content === null) {
         return { ok: false, error: 'mock adapter: messages 中没有 user 消息', retryable: false }
       }
-      return { ok: true, text: `[mock] 收到：${content}` }
+      return { ok: true, text: `[mock] 收到：${content}`, usage: { promptTokens: content.length, completionTokens: 20, totalTokens: content.length + 20 } }
     },
   }
 }

@@ -10,12 +10,12 @@ function tempDb (): { path: string; cleanup: () => void } {
 }
 
 describe('SQLite 存储层', () => {
-  test('建表：5 张表全部存在', () => {
+  test('建表：6 张表全部存在', () => {
     const { path, cleanup } = tempDb()
     try {
       const db = createDatabase(path)
       const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map((r: any) => r.name).sort()
-      expect(tables).toEqual(['conversations', 'flows', 'media_files', 'messages', 'safety_logs', 'whitelist_rooms'])
+      expect(tables).toEqual(['conversations', 'flows', 'media_files', 'messages', 'safety_logs', 'usage_logs', 'whitelist_rooms'])
       db.close()
     } finally {
       cleanup()

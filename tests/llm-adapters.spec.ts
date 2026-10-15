@@ -80,6 +80,23 @@ describe('Ark adapter', () => {
   test('name 为 ark', () => {
     expect(makeArk(vi.fn()).name).toBe('ark')
   })
+
+  test('响应含 usage 时透传 token 统计', async () => {
+    const fake = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ message: { role: 'assistant', content: 'hi' } }],
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    }), { status: 200 }))
+    const r = await makeArk(fake).complete({ messages: [{ role: 'user', content: 'hi' }] })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.usage).toEqual({ promptTokens: 10, completionTokens: 5, totalTokens: 15 })
+  })
+
+  test('响应缺 usage 时正常返回（usage 为可选）', async () => {
+    const fake = vi.fn(async () => okResponse('hi'))
+    const r = await makeArk(fake).complete({ messages: [{ role: 'user', content: 'hi' }] })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.usage).toBeUndefined()
+  })
 })
 
 describe('OpenAI adapter', () => {

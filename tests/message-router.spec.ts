@@ -324,7 +324,7 @@ describe('message-router × 阶段 2（安全 + 流程）', () => {
       await router.handle(msg)
       expect(run).toHaveBeenCalled()
       expect(sent).toEqual(['回复内容'])
-      expect(repo.findById(msg.id)!.flow_result).toBe(`matched:${flow.name}:ok`)
+      expect(repo.findById(msg.id)!.flow_result).toBe(`name=${flow.name};result=ok`)
       expect(repo.findById(msg.id)!.handled_by).toBe('flow')
       db.close()
     } finally { rmSync(dir, { recursive: true, force: true }) }
@@ -451,7 +451,7 @@ describe('message-router × 阶段 2（安全 + 流程）', () => {
       await router.handle(msg)
       const row = repo.findById(msg.id)!
       expect(row.handled_by).toBe('flow')
-      expect(row.flow_result).toBe('matched:F:cooldown')
+      expect(row.flow_result).toBe('name=F;result=cooldown')
       db.close()
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
@@ -642,7 +642,7 @@ describe('message-router × 阶段 3（AI 分发）', () => {
       expect(chat).not.toHaveBeenCalled()
       const row = repo.findById(msg.id)!
       expect(row.handled_by).toBe('flow')
-      expect(row.flow_result).toBe('matched:F:error')
+      expect(row.flow_result).toBe('name=F;result=error')
       db.close()
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })

@@ -1,7 +1,11 @@
 import { describe, expect, test, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createAiModule } from '../src/ai/ai-module.js'
 import { createMemoryWindow } from '../src/ai/memory.js'
 import { createLogger } from '../src/utils/logger.js'
+import { createDatabase, UsageRepository } from '../src/storage/db.js'
 import type { AppConfig } from '../src/config/config-loader.js'
 import type { LlmAdapter } from '../src/llm/llm-interface.js'
 import type { SafeSender } from '../src/safety/safe-sender.js'
@@ -149,5 +153,48 @@ describe('aiModule.chat 失败路径', () => {
     const s = setup({ ok: false, error: 'x', retryable: false })
     await s.mod.chat('c1', 'hi', s.sender)
     expect(s.sent).toHaveLength(1)
+  })
+})
+
+describe('aiModule.chat usage 落库', () => {
+  test('LLM 调用后落 usage_logs', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-usage-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const usageRepo = new UsageRepository(db)
+      const sent: string[] = []
+      const memory = createMemoryWindow({ windowSize: 10, ttlMinutes: 30 })
+      const mod = createAiModule({
+        llm: stubAdapter({ ok: true, text: '回复', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } }),
+        memory, sender: stubSender(sent), log: createLogger('T'),
+        config: AI, fallbackReply: FALLBACK, usageRepo,
+      })
+      await mod.chat('c1', 'hi', stubSender(sent))
+      const row = db.prepare('SELECT * FROM usage_logs').get() as any
+      expect(row.provider).toBe('mock')
+      expect(row.total_tokens).toBe(15)
+      expect(row.ok).toBe(1)
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('LLM 失败也落 usage_logs（ok=0）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-usage-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const usageRepo = new UsageRepository(db)
+      const sent: string[] = []
+      const memory = createMemoryWindow({ windowSize: 10, ttlMinutes: 30 })
+      const mod = createAiModule({
+        llm: stubAdapter({ ok: false, error: 'HTTP 500', retryable: true }),
+        memory, sender: stubSender(sent), log: createLogger('T'),
+        config: AI, fallbackReply: FALLBACK, usageRepo,
+      })
+      await mod.chat('c1', 'hi', stubSender(sent))
+      const row = db.prepare('SELECT * FROM usage_logs').get() as any
+      expect(row.ok).toBe(0)
+      expect(row.error).toBe('HTTP 500')
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 })

@@ -3,6 +3,7 @@ import type { MemoryWindow } from './memory.js'
 import type { SafeSender } from '../safety/safe-sender.js'
 import type { Logger } from '../utils/logger.js'
 import type { AppConfig } from '../config/config-loader.js'
+import type { UsageRepository } from '../storage/db.js'
 
 export type AiChatResult = { replied: boolean; reason: string }
 
@@ -20,10 +21,14 @@ export interface AiModuleDeps {
   log: Logger
   config: AppConfig['ai']
   fallbackReply: string
+  /** 可选：LLM 用量落库。缺省时用 no-op，既不影响调用方，也让旧测试无需改造 */
+  usageRepo?: UsageRepository
 }
 
 /** LLM 不可用时的第二句话：告诉用户可以转人工 */
 const HANDOFF_HINT = '如持续无法回答，可回复「人工」转接客服。'
+
+const NOOP_USAGE_REPO: Pick<UsageRepository, 'insert'> = { insert: () => {} }
 
 /**
  * AI 对话模块（阶段 3）。
@@ -33,6 +38,7 @@ const HANDOFF_HINT = '如持续无法回答，可回复「人工」转接客服�
  */
 export function createAiModule (deps: AiModuleDeps): AiModule {
   const { llm, memory, log, config, fallbackReply } = deps
+  const usageRepo = deps.usageRepo ?? NOOP_USAGE_REPO
 
   return {
     async chat (conversationId, userText, sender): Promise<AiChatResult> {
@@ -50,6 +56,23 @@ export function createAiModule (deps: AiModuleDeps): AiModule {
         temperature: config.ark.temperature,
         maxTokens: config.ark.maxTokens,
       })
+
+      // 落 usage（无论成败都记录）
+      try {
+        usageRepo.insert({
+          conversation_id: conversationId,
+          provider: config.provider,
+          model: config.ark.model,
+          prompt_tokens: result.ok && result.usage ? result.usage.promptTokens : null,
+          completion_tokens: result.ok && result.usage ? result.usage.completionTokens : null,
+          total_tokens: result.ok && result.usage ? result.usage.totalTokens : null,
+          ok: result.ok ? 1 : 0,
+          error: result.ok ? null : result.error,
+          created_at: Date.now(),
+        })
+      } catch (e) {
+        log.error('usage 落库失败 conv=%s: %s', conversationId, (e as Error).message)
+      }
 
       if (!result.ok || !result.text.trim()) {
         const err = result.ok ? 'LLM 返回空内容' : result.error

@@ -137,7 +137,7 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
             // 记录命中的流程名与执行结果。
             // reason 体现 cooldown / no_executable_steps / error 等分支 —— 阶段 4 管理台
             // 排查「为什么这条消息没回复」时需要它，丢掉就只能看到「命中了但没动静」。
-            repo.setResult(msg.id, 'flow_result', `matched:${flow.name}:${runResult.reason}`)
+            repo.setResult(msg.id, 'flow_result', `name=${flow.name};result=${runResult.reason}`)
             // 命中流程时责任人先写成 'flow'（包括 cooldown/error 等未成功执行的情况）：
             // 归一化为「由流程模块负责处理」，具体结果看 flow_result。
             // 若命中但未发出内容（stepsRun=0），后续 AI 会接管并改写为 'ai' ——
