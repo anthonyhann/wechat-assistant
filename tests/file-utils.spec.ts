@@ -69,6 +69,38 @@ describe('resolveMediaPath', () => {
     })
     expect(p).toBe(join('/data', 'media', '_private', '2026-08-13', 'msg-2.pdf'))
   })
+
+  // 回归测试：北京时间 00:00-07:59 的消息若按 UTC 切片会被归入前一天
+  test('按指定时区取日期（Asia/Shanghai 凌晨消息不落到前一天）', () => {
+    const early = new Date('2026-08-13T00:30:00+08:00')
+    const p = resolveMediaPath({
+      dataDir: '/data', roomId: 'room-1', date: early,
+      msgId: 'msg-early', ext: '.jpg', timeZone: 'Asia/Shanghai',
+    })
+    expect(p).toBe(join('/data', 'media', 'room-1', '2026-08-13', 'msg-early.jpg'))
+  })
+
+  test('时区参数跨日边界正确（UTC 仍是前一天时）', () => {
+    // 北京时间 2026-08-13 00:00 即 UTC 2026-08-12 16:00
+    const midnight = new Date('2026-08-13T00:00:00+08:00')
+    const shanghai = resolveMediaPath({
+      dataDir: '/d', roomId: 'r', date: midnight, msgId: 'm', ext: '.jpg', timeZone: 'Asia/Shanghai',
+    })
+    const utc = resolveMediaPath({
+      dataDir: '/d', roomId: 'r', date: midnight, msgId: 'm', ext: '.jpg', timeZone: 'UTC',
+    })
+    expect(shanghai).toBe(join('/d', 'media', 'r', '2026-08-13', 'm.jpg'))
+    expect(utc).toBe(join('/d', 'media', 'r', '2026-08-12', 'm.jpg'))
+  })
+
+  test('不传时区时使用本地时区（非 UTC）', () => {
+    // 用本地时区构造一个当天中午的时间点，应稳定落在当天
+    const noonLocal = new Date(2026, 7, 13, 12, 0, 0)
+    const p = resolveMediaPath({
+      dataDir: '/d', roomId: 'r', date: noonLocal, msgId: 'm', ext: '.jpg',
+    })
+    expect(p).toBe(join('/d', 'media', 'r', '2026-08-13', 'm.jpg'))
+  })
 })
 
 describe('ensureDir', () => {

@@ -61,6 +61,21 @@ export function pickExtension (opts: { fileName?: string | null; mime?: string |
   return '.bin'
 }
 
+/**
+ * 按指定时区取 YYYY-MM-DD。
+ * 未传 timeZone 时用系统本地时区（而非 UTC）——避免北京时间 00:00-07:59 的消息
+ * 被误归入前一天目录。
+ */
+function localDay (date: Date, timeZone?: string): string {
+  // en-CA 的日期格式天然是 YYYY-MM-DD
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date)
+}
+
 /** 组织媒体落盘路径：{dataDir}/media/{roomId|_private}/{YYYY-MM-DD}/{msgId}{ext} */
 export function resolveMediaPath (opts: {
   dataDir: string
@@ -68,9 +83,11 @@ export function resolveMediaPath (opts: {
   date: Date
   msgId: string
   ext: string
+  /** 可选时区，如 'Asia/Shanghai'；缺省用系统本地时区 */
+  timeZone?: string
 }): string {
-  const { dataDir, roomId, date, msgId, ext } = opts
-  const day = date.toISOString().slice(0, 10)
+  const { dataDir, roomId, date, msgId, ext, timeZone } = opts
+  const day = localDay(date, timeZone)
   const bucket = roomId ?? '_private'
   return join(dataDir, 'media', bucket, day, `${msgId}${ext}`)
 }
