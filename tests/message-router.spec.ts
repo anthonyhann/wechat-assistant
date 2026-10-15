@@ -270,7 +270,7 @@ describe('message-router × 阶段 2（安全 + 流程）', () => {
       await router.handle(msg)
       expect(run).toHaveBeenCalled()
       expect(sent).toEqual(['回复内容'])
-      expect(repo.findById(msg.id)!.flow_result).toBe(`matched:${flow.name}`)
+      expect(repo.findById(msg.id)!.flow_result).toBe(`matched:${flow.name}:ok`)
       expect(repo.findById(msg.id)!.handled_by).toBe('flow')
       db.close()
     } finally { rmSync(dir, { recursive: true, force: true }) }
