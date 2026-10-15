@@ -132,8 +132,10 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
             // reason 体现 cooldown / no_executable_steps / error 等分支 —— 阶段 4 管理台
             // 排查「为什么这条消息没回复」时需要它，丢掉就只能看到「命中了但没动静」。
             repo.setResult(msg.id, 'flow_result', `matched:${flow.name}:${runResult.reason}`)
-            // 命中流程时责任人一律写成 'flow'（包括 cooldown/error 等未成功执行的情况）：
+            // 命中流程时责任人先写成 'flow'（包括 cooldown/error 等未成功执行的情况）：
             // 归一化为「由流程模块负责处理」，具体结果看 flow_result。
+            // 若命中但未发出内容（stepsRun=0），后续 AI 会接管并改写为 'ai' ——
+            // handled_by 是最终责任人口径，具体经过看 flow_result / ai_result。
             // 若只在成功时写，未成功且此前未备份的消息会留下 handled_by=NULL，
             // 与「根本没被任何模块处理」无法区分。
             repo.setHandledBy(msg.id, 'flow')
@@ -170,8 +172,11 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
           if (isRoom && typeof msg.mentionText === 'function') {
             try {
               promptText = await msg.mentionText()
-            } catch {
+            } catch (e) {
+              // 某些 puppet 不支持 mentionText——回退原文，但必须留痕，
+              // 否则 AI 会永远收到带 @ 前缀的 prompt 且无人知晓。
               promptText = text
+              log.warn('mentionText() 调用失败，用原文喂 AI msg=%s: %s', msg.id, (e as Error).message)
             }
           }
 
