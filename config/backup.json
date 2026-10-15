@@ -4,5 +4,6 @@
   "maxFileSizeMB": 100,
   "dedupeByHash": true,
   "saveAllTextMessages": true,
-  "timeZone": "Asia/Shanghai"
+  "timeZone": "Asia/Shanghai",
+  "retentionDays": 30
 }

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { loadConfig } from './config/config-loader.js'
 import { createLogger } from './utils/logger.js'
 import { createDatabase, MessageRepository, MediaFileRepository, WhitelistRepository, SafetyLogRepository, ConversationRepository } from './storage/db.js'
+import { runRetentionCleanup } from './storage/retention.js'
 import { createBackupModule } from './backup/backup-module.js'
 import { createBot } from './bot/bot.js'
 import { createMessageRouter } from './router/message-router.js'
@@ -24,6 +25,9 @@ async function main (): Promise<void> {
   const db = createDatabase(dbPath)
   const repo = new MessageRepository(db)
   log.info('数据库已就绪: %s', dbPath)
+
+  // 启动时数据保留清理
+  runRetentionCleanup({ db, retentionDays: config.backup.retentionDays, log })
 
   const mediaRepo = new MediaFileRepository(db)
   const whitelistRepo = new WhitelistRepository(db)

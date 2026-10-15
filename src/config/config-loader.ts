@@ -62,6 +62,8 @@ const BackupConfigSchema = z.object({
   timeZone: z.string().default('Asia/Shanghai').refine(isValidTimeZone, {
     message: '不是合法的 IANA 时区名（如 Asia/Shanghai）',
   }),
+  /** 数据保留天数（messages / media_files / conversations / safety_logs / usage_logs） */
+  retentionDays: z.number().int().positive().default(30),
 })
 
 const AiConfigSchema = z.object({
