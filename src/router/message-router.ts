@@ -137,10 +137,12 @@ export function createMessageRouter (deps: RouterDeps): MessageRouter {
             // 若只在成功时写，未成功且此前未备份的消息会留下 handled_by=NULL，
             // 与「根本没被任何模块处理」无法区分。
             repo.setHandledBy(msg.id, 'flow')
-            // 互斥只针对「命中并执行」的流程（用户确认）。命中但未执行
-            // （cooldown / no_executable_steps / error）时流程没有产出任何回复，
-            // 此时不放行 AI 会让用户 @ 机器人却毫无响应——表现为静默故障。
-            flowHandled = runResult.executed
+            // 互斥只针对「命中且实际发出了内容」的流程（用户确认的「命中并执行」）。
+            // 用 stepsRun > 0 而非 executed：部分执行失败（如 say 成功、image 抛错）
+            // 时 executed=false 但用户已收到内容，再放行 AI 会造成重复回复；
+            // 而 cooldown / no_executable_steps 时 stepsRun=0，用户什么都没收到，
+            // 不放行 AI 会表现为静默故障。
+            flowHandled = runResult.stepsRun > 0
           }
         }
       }
