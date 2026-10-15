@@ -569,6 +569,34 @@ describe('message-router × 阶段 3（AI 分发）', () => {
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
+  // 回归（互斥边界）：流程部分执行（已发出内容但后续失败）时，executed=false 但
+  // stepsRun>0 —— 用户已收到半截回复，此时再走 AI 会造成重复回复。
+  // 互斥应看「是否发出了内容」（stepsRun>0）而非「是否全部成功」（executed）。
+  test('流程部分执行（stepsRun>0 但失败）时不走 AI', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wc-p3-'))
+    try {
+      const db = createDatabase(join(dir, 't.sqlite'))
+      const repo = new MessageRepository(db)
+      const chat = vi.fn(async () => ({ replied: true, reason: 'ok' }))
+      const cfg = {
+        ...makeConfig(),
+        flows: [{ name: 'F', trigger: '活动', scope: 'both' as const, enabled: true, steps: [{ type: 'say' as const, content: 'x' }] }],
+      }
+      const router = createMessageRouter({
+        repo, log: createLogger('R'), config: cfg, safetyGate: passGate as any,
+        flowEngine: { run: async () => ({ executed: false, reason: 'error', stepsRun: 1 }) } as any,
+        aiModule: { chat } as any,
+      })
+      const msg = fakeMsg({ text: () => '有什么活动' })
+      await router.handle(msg)
+      expect(chat).not.toHaveBeenCalled()
+      const row = repo.findById(msg.id)!
+      expect(row.handled_by).toBe('flow')
+      expect(row.flow_result).toBe('matched:F:error')
+      db.close()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
   test('流程命中但未执行（冷却）时走 AI', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'wc-p3-'))
     try {
