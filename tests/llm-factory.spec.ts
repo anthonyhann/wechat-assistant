@@ -89,6 +89,11 @@ describe('createLlmAdapter', () => {
   })
 
   // 主动选择 provider=mock（开发模式）才回显；与 key 缺失的被动降级区分开
+  test('provider=arkcli 返回 arkcli 适配器（不读 key，走本机登录态）', () => {
+    const adapter = make({ provider: 'arkcli' as any }, {})
+    expect(adapter.name).toBe('arkcli')
+  })
+
   test('provider=mock 时正常回显', async () => {
     const r = await make({ provider: 'mock' }, {}).complete({ messages: [{ role: 'user', content: 'hi' }] })
     expect(r.ok).toBe(true)
