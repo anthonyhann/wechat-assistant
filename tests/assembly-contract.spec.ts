@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createDatabase, UsageRepository, ConversationRepository } from '../src/storage/db.js'
-import { createLlmAdapter } from '../src/llm/llm-factory.js'
+import type { LlmAdapter } from '../src/llm/llm-interface.js'
 import { createMirroredMemory, createMemoryWindow } from '../src/ai/memory.js'
 import { createAiModule } from '../src/ai/ai-module.js'
 import { createLogger } from '../src/utils/logger.js'
@@ -26,8 +26,17 @@ describe('装配契约：AI 模块的 usage 落库', () => {
       const config = loadConfig()
       const log = createLogger('WireTest')
 
+      // 用可控的 mock adapter，避免依赖 .env/真实 key（CI 环境无 .env）。
+      // 本用例验证的是「装配链接通后 usage 会落库」，不是某个真实 provider 的行为。
+      const mockLlm: LlmAdapter = {
+        name: 'mock',
+        async complete () {
+          return { ok: true as const, text: 'ok', usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } }
+        },
+      }
+
       // 与 src/index.ts 完全相同的组装顺序与调用签名
-      const llm = createLlmAdapter({ config: config.ai, log })
+      const llm = mockLlm
       const conversationRepo = new ConversationRepository(db)
       const memory = createMirroredMemory({
         window: createMemoryWindow({
@@ -52,8 +61,8 @@ describe('装配契约：AI 模块的 usage 落库', () => {
 
       const row = db.prepare('SELECT provider, ok, total_tokens FROM usage_logs').get() as any
       expect(row).toBeDefined()
-      // provider 会被 .env 的 LLM_PROVIDER 覆盖（env 优先），不硬编码期望值，
-      // 只校验它是合法 provider 名且 usage 落库字段齐全。
+      // usage 行记录的 provider 来自 loadConfig（可能被 .env 覆盖），
+      // 与 mock adapter 无关——只校验它是合法 provider 名。
       expect(typeof row.provider).toBe('string')
       expect(PROVIDER_NAMES).toContain(row.provider)
       expect(row.ok).toBe(1)
