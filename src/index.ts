@@ -23,6 +23,18 @@ async function main (): Promise<void> {
 
   log.info('加载配置完成，机器人名: %s', config.bot.name)
 
+  // 启动前校验 puppet 协议配置：service 协议必须有 token，
+  // 否则会在启动深处抛 node 堆栈（难以定位）。
+  const puppet = process.env['WECHATY_PUPPET'] ?? 'wechaty-puppet-mock'
+  if (puppet === 'wechaty-puppet-service' && !process.env['WECHATY_PUPPET_SERVICE_TOKEN']?.trim()) {
+    throw new Error(
+      'WECHATY_PUPPET=wechaty-puppet-service 但未设置 WECHATY_PUPPET_SERVICE_TOKEN。\n' +
+      '  ① 已有 token：在 .env 填入 WECHATY_PUPPET_SERVICE_TOKEN=puppet_xxx\n' +
+      '  ② 还没有 token：可先在 pad-local.com / 服务商处申请（含 7 天免费试用），或先切回 mock 模式 WECHATY_PUPPET=wechaty-puppet-mock\n' +
+      '  完整接入步骤见 docs/connect-real-wechat.md',
+    )
+  }
+
   const dbPath = process.env['DB_PATH'] || join(process.cwd(), 'data', 'wechat-assistant.sqlite')
   const db = createDatabase(dbPath)
   const repo = new MessageRepository(db)
