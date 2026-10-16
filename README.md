@@ -1,14 +1,108 @@
 # 微信社群个人助理
 
-基于 Wechaty 的微信群个人助理：消息备份 / 关键词自动问答 / AI 对话 / 安全闸门 / Web 管理台。
+基于 Wechaty 的微信群个人助理：**消息备份 / 关键词自动问答 / AI 对话 / 内容安全闸门 / Web 管理台**。
 
-## 快速开始
+## 它能做什么
+
+| 能力 | 触发方式 | 说明 |
+|------|---------|------|
+| 💾 消息备份 | 自动（白名单群） | 白名单群里的图片/文件自动下载到 `data/media/{群}/{日期}/`，sha256 去重，超 100MB 不下载 |
+| 🤖 AI 对话 | 私聊随时；群内需 **@机器人** | 转发到 LLM，带 10 轮/30 分钟记忆窗口，回复经安全闸门 |
+| 💬 关键词问答 | 私聊/群内命中触发词 | 按 `config/flows.json` 配置的流程逐步回复（活动/转人工等） |
+| 🛡️ 安全闸门 | 自动（所有对外回复） | 609 词本地词库拦截敏感内容 + prompt 注入防护，命中即换兜底话术 |
+| 📊 Web 管理台 | 浏览器打开 | 统计看板、消息流水、白名单/流程在线配置、LLM 用量 |
+| 🔒 数据保留 | 自动（启动时） | 消息/日志超 30 天自动清理（可配） |
+
+## 快速开始（5 分钟跑起来）
 
 ```bash
+# 1. 安装依赖
 npm install
-cp .env.example .env  # 按需填写
+
+# 2. 准备配置（.env 控制 LLM 和协议，已按 mock 模式填好）
+cp .env.example .env
+
+# 3. 启动
 npm start
 ```
+
+启动成功会看到：
+
+```
+加载配置完成，机器人名: wechat-assistant
+数据库已就绪: data/wechat-assistant.sqlite
+管理台已启动 http://127.0.0.1:3000
+机器人已启动
+wechat-assistant 已就绪
+```
+
+然后**浏览器打开 http://127.0.0.1:3000/** 就能看到管理台看板（统计/消息/白名单/流程/安全日志/LLM 用量）。
+
+> **当前是 mock 模式**（`WECHATY_PUPPET=wechaty-puppet-mock`）——不连真实微信，
+> 用于验证机器人的所有逻辑（AI/备份/安全/管理台）都能正常工作。见下方「连上真实微信」。
+
+## 日常使用
+
+### 启动 / 停止
+```bash
+npm start          # 生产启动
+npm run dev        # 开发模式（改代码自动重启）
+# 停止：Ctrl+C（会优雅退出：停管理台→停机器人→关数据库）
+```
+
+### 管理台操作（http://127.0.0.1:3000/）
+- **看板**：今日消息数、备份文件数/体积、AI 调用数、安全拦截数、今日 token 消耗
+- **白名单**：在线增删要备份的群（`PUT /api/whitelist`，改完立即生效，不用重启）
+- **流程**：查看关键词流程（在线编辑见下方）
+- **安全日志**：哪些消息被拦了、命中了什么词
+
+也可以用命令行（不用开浏览器）：
+```bash
+# 加白名单
+curl -X PUT http://127.0.0.1:3000/api/whitelist \
+  -H 'content-type: application/json' \
+  -d '{"roomId":"xxx@chatroom","roomName":"我的群"}'
+
+# 看统计
+curl http://127.0.0.1:3000/api/stats
+
+# 看 LLM 用量
+curl "http://127.0.0.1:3000/api/usage?days=7"
+```
+
+### 配置白名单（另一种方式：命令行）
+```bash
+npm run seed:whitelist -- "xxx@chatroom" "群名"
+npm run seed:whitelist                    # 列出当前白名单
+```
+
+### 改 AI 回复的「人格」
+编辑 `config/ai.json` 的 `systemPrompt`，重启生效。
+
+### 改关键词回复流程
+编辑 `config/flows.json`，或在管理台在线改（`PUT /api/flows`，热生效）。
+
+### 验证 LLM 真的通了
+```bash
+npm run tsx scripts/llm-integration-test.ts
+```
+会真实调用 LLM，检查 5 项：连通性、用量记录、安全拦截、多轮记忆、节流。
+
+## 连上真实微信
+
+mock 模式只验证逻辑。要收发真实微信消息，改 `.env` 的协议（**三选一**）：
+
+| 协议 | 特点 | 适用 |
+|------|------|------|
+| `wechaty-puppet-mock`（默认） | 不连微信，纯逻辑验证 | 开发/测试 |
+| `wechaty-puppet-wechat4u` | 免费 Web 协议 | 个人试用，**有封号风险** |
+| `wechaty-puppet-service` | 官方付费协议 | 稳定生产（需买 token） |
+
+```bash
+# 切到免费协议（.env）
+WECHATY_PUPPET=wechaty-puppet-wechat4u
+```
+然后 `npm start`，终端会弹出**登录二维码**，用微信扫码即可。上线前建议评估换付费协议。
 
 ## 配置
 
