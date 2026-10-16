@@ -13,8 +13,8 @@ import type { SafeSender } from '../src/safety/safe-sender.js'
 const FALLBACK = '这个问题我暂时无法回答，我们可以聊聊别的～'
 const AI: AppConfig['ai'] = {
   provider: 'mock',
-  ark: { model: 'm', baseUrl: 'https://x.com', apiKeyEnv: 'K', temperature: 0.7, maxTokens: 1024 },
-  openaiCompat: { model: 'm', baseUrl: 'https://x.com', apiKeyEnv: 'K' },
+  temperature: 0.7,
+  maxTokens: 1024,
   memory: { enabled: true, windowSize: 10, ttlMinutes: 30 },
   systemPrompt: '你是微信群个人助理',
   // 既有用例连续调同一对话（如「多轮对话时历史进入 prompt」），不能受节流影响
@@ -65,7 +65,7 @@ describe('aiModule.chat 成功路径', () => {
   })
 
   test('temperature / maxTokens 来自配置', async () => {
-    const s = setup({ ok: true, text: 'x' }, { ark: { ...AI.ark, temperature: 0.3, maxTokens: 512 } })
+    const s = setup({ ok: true, text: 'x' }, { temperature: 0.3, maxTokens: 512 })
     await s.mod.chat('c1', 'hi', s.sender)
     const req = s.complete.mock.calls[0]![0]
     expect(req.temperature).toBe(0.3)
