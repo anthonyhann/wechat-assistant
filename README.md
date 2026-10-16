@@ -19,8 +19,33 @@ npm start
 | `config/ai.json` | LLM 配置（provider、model、温度、记忆、节流） |
 | `config/safety.json` | 安全配置（词库、兜底话术、审计） |
 | `config/flows.json` | 关键词流程（可在管理台在线改） |
-| `config/sensitive-words.txt` | 敏感词库（分类分节） |
-| `.env` | 密钥（ARK_API_KEY / OPENAI_API_KEY / WECHATY_PUPPET） |
+| `config/sensitive-words.txt` | 敏感词库（609 词五分类 + 注入特征） |
+| `.env` | LLM_PROVIDER / ARK_MODEL / ARK_BASE_URL / API key / WECHATY_PUPPET |
+
+`.env` 的 `LLM_PROVIDER` / `ARK_MODEL` / `ARK_BASE_URL` / `OPENAI_MODEL` / `OPENAI_BASE_URL`
+会**覆盖** `config/ai.json` 的同名字段（env 优先，切换提供方是部署期行为）。
+
+## LLM 提供方（四种）
+
+| provider | 凭证 | 说明 |
+|----------|------|------|
+| `mock` | 无 | 开发模式，回显用户输入，零费用 |
+| `arkcli` | 本机 `arkcli auth login` 登录态 | **火山方舟 Coding Plan**（推荐，本机已联调验证 15/15） |
+| `ark` | `.env` 的 `ARK_API_KEY` | 标准方舟推理接入点（裸 Bearer 调 `/api/v3`） |
+| `openai` | `.env` 的 `OPENAI_API_KEY` | 任意 OpenAI 兼容端点 |
+
+```bash
+# 使用 Coding Plan（.env）
+LLM_PROVIDER=arkcli
+ARK_MODEL=deepseek-v4.1-flash
+
+# 联调验证（真实调用，五项全检）
+npm run tsx scripts/llm-integration-test.ts
+```
+
+> **Coding Plan 注意**：`arkcli` provider 走本机 arkcli 登录态，**不需要**也不应设置
+> `ARK_API_KEY` / `ARK_BASE_URL`——这两个变量会让 arkcli 进入「自定义端点 + API Key」
+> 模式，与登录态互斥（适配器已自动剔除）。
 
 ## 管理台
 
