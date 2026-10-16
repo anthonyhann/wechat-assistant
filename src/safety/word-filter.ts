@@ -28,7 +28,24 @@ export type MatchResult =
   | { matched: true; category: string; word: string }
   | { matched: false }
 
-/** 本地词库过滤器（L1）。零成本、同步、可预测。 */
+/**
+ * 正则规则集。
+ *
+ * 存在的理由：子串匹配对「短特征词」无能为力——`sk-` 只有 3 字符，
+ * 放进词库会误伤 task-1 / disk-space / risk-it 等所有含该子串的正常词。
+ * 但真实的 API Key 有明确的结构（前缀 + 足够长的随机段），用正则既能
+ * 精准识别又不误伤。这正是设计文档 §4.1「正则 + 子串匹配」里正则的那一半。
+ */
+const REGEX_RULES: Array<{ category: string; name: string; re: RegExp }> = [
+  // OpenAI / Anthropic 风格 key：sk- 后接 20+ 位字母数字
+  { category: 'self', name: 'API Key(sk-...)', re: /sk-[A-Za-z0-9]{20,}/ },
+  // ARK / 方舟风格：短横线后 24+ 位
+  { category: 'self', name: 'API Key(ark-...)', re: /ark-[A-Za-z0-9]{24,}/ },
+  // AWS Access Key ID
+  { category: 'self', name: 'AWS Access Key', re: /AKIA[0-9A-Z]{16}/ },
+]
+
+/** 本地词库过滤器（L1）：子串匹配 + 正则规则。零成本、同步、可预测。 */
 export class WordFilter {
   private readonly entries: Array<{ category: string; word: string; lower: string }> = []
 
@@ -52,6 +69,13 @@ export class WordFilter {
     for (const entry of this.entries) {
       if (entry.lower && lower.includes(entry.lower)) {
         return { matched: true, category: entry.category, word: entry.word }
+      }
+    }
+
+    // 词库未命中时再跑正则规则（结构特征，避免短词误伤）
+    for (const rule of REGEX_RULES) {
+      if (rule.re.test(text)) {
+        return { matched: true, category: rule.category, word: rule.name }
       }
     }
 
