@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Wechaty 社区
+    url: https://github.com/wechaty/wechaty/discussions
+    about: Wechaty 框架本身的问题（登录协议、puppet 选择等）建议到这里问
+  - name: 📖 接入真实微信指南
+    url: https://github.com/anthonyhann/wechat-assistant/blob/main/docs/connect-real-wechat.md
+    about: 扫码登录、token 接入、常见登录问题，先看这份文档再提问
