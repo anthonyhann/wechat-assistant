@@ -16,28 +16,50 @@ npm start
 |------|------|
 | `config/bot.json` | 机器人名、触发策略、管理台端口 |
 | `config/backup.json` | 备份规则（白名单、类型、大小上限、保留天数） |
-| `config/ai.json` | LLM 配置（provider、model、温度、记忆、节流） |
+| `config/ai.json` | LLM 配置（provider、温度、记忆、节流、providerOverrides） |
 | `config/safety.json` | 安全配置（词库、兜底话术、审计） |
 | `config/flows.json` | 关键词流程（可在管理台在线改） |
 | `config/sensitive-words.txt` | 敏感词库（609 词五分类 + 注入特征） |
-| `.env` | LLM_PROVIDER / ARK_MODEL / ARK_BASE_URL / API key / WECHATY_PUPPET |
+| `.env` | LLM_PROVIDER / LLM_MODEL / 各厂商 API key / WECHATY_PUPPET |
 
-`.env` 的 `LLM_PROVIDER` / `ARK_MODEL` / `ARK_BASE_URL` / `OPENAI_MODEL` / `OPENAI_BASE_URL`
-会**覆盖** `config/ai.json` 的同名字段（env 优先，切换提供方是部署期行为）。
+`.env` 的 `LLM_PROVIDER` / `LLM_MODEL` / `LLM_BASE_URL` / `LLM_API_KEY_ENV`
+会**覆盖** `config/ai.json`（env 优先，切换提供方是部署期行为）。
 
-## LLM 提供方（四种）
+## LLM 提供方（12 家 + mock）
 
-| provider | 凭证 | 说明 |
-|----------|------|------|
-| `mock` | 无 | 开发模式，回显用户输入，零费用 |
-| `arkcli` | 本机 `arkcli auth login` 登录态 | **火山方舟 Coding Plan**（推荐，本机已联调验证 15/15） |
-| `ark` | `.env` 的 `ARK_API_KEY` | 标准方舟推理接入点（裸 Bearer 调 `/api/v3`） |
-| `openai` | `.env` 的 `OPENAI_API_KEY` | 任意 OpenAI 兼容端点 |
+`provider` 字段填下面的名字即可，**baseUrl / apiKeyEnv / model 都有 preset 默认值**：
+
+| 分类 | provider | 协议 | key 环境变量 |
+|------|----------|------|-------------|
+| 国内 | `deepseek` | OpenAI 兼容 | `DEEPSEEK_API_KEY` |
+| 国内 | `qwen`（通义） | OpenAI 兼容 | `DASHSCOPE_API_KEY` |
+| 国内 | `glm`（智谱） | OpenAI 兼容 | `ZHIPU_API_KEY` |
+| 国内 | `kimi`（月之暗面） | OpenAI 兼容 | `MOONSHOT_API_KEY` |
+| 国内 | `doubao`（豆包，别名 `ark`） | OpenAI 兼容 | `ARK_API_KEY` |
+| 国内 | `minimax` | OpenAI 兼容 | `MINIMAX_API_KEY` |
+| 国内 | `baichuan`（百川） | OpenAI 兼容 | `BAICHUAN_API_KEY` |
+| 国外 | `openai` | OpenAI 兼容 | `OPENAI_API_KEY` |
+| 国外 | `claude` | **Anthropic Messages** | `ANTHROPIC_API_KEY` |
+| 国外 | `gemini` | **Google generateContent** | `GEMINI_API_KEY` |
+| 特殊 | `arkcli` | 本机 arkcli CLI | 无需 key（`arkcli auth login`） |
+| 开发 | `mock` | 回显 | 无 |
+
+> **新增一家厂商只需在 `config/ai.json` 加一条**（OpenAI 兼容类零代码）：
+> ```json
+> "providerOverrides": {
+>   "deepseek": { "model": "deepseek-reasoner", "baseUrl": "https://my-proxy.example/v1", "apiKeyEnv": "MY_KEY" }
+> }
+> ```
+> 全新协议才需要在 `src/llm/` 加适配器 + 在 `providers.ts` 注册表加 preset。
 
 ```bash
-# 使用 Coding Plan（.env）
+# 使用 Coding Plan（.env，推荐——本机已联调 15/15）
 LLM_PROVIDER=arkcli
-ARK_MODEL=deepseek-v4.1-flash
+LLM_MODEL=deepseek-v4.1-flash
+
+# 使用 DeepSeek 官方 API
+LLM_PROVIDER=deepseek
+DEEPSEEK_API_KEY=sk-xxx
 
 # 联调验证（真实调用，五项全检）
 npm run tsx scripts/llm-integration-test.ts
