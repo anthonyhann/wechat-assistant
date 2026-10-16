@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadConfig } from './config/config-loader.js'
 import { createLogger } from './utils/logger.js'
-import { createDatabase, MessageRepository, MediaFileRepository, WhitelistRepository, SafetyLogRepository, ConversationRepository } from './storage/db.js'
+import { createDatabase, MessageRepository, MediaFileRepository, WhitelistRepository, SafetyLogRepository, ConversationRepository, UsageRepository } from './storage/db.js'
 import { runRetentionCleanup } from './storage/retention.js'
 import { createBackupModule } from './backup/backup-module.js'
 import { createBot } from './bot/bot.js'
@@ -60,6 +60,7 @@ async function main (): Promise<void> {
   })
   const aiModule = createAiModule({
     llm, memory, log, config: config.ai, fallbackReply: config.safety.fallbackReply,
+    usageRepo: new UsageRepository(db),
   })
 
   const router = createMessageRouter({ repo, log, config, backup, safetyGate, flowEngine, aiModule })
