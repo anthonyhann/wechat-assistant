@@ -1,4 +1,5 @@
 import type { LlmAdapter } from '../llm/llm-interface.js'
+import { resolveProvider } from '../llm/llm-factory.js'
 import type { MemoryWindow } from './memory.js'
 import type { SafeSender } from '../safety/safe-sender.js'
 import type { Logger } from '../utils/logger.js'
@@ -105,16 +106,18 @@ export function createAiModule (deps: AiModuleDeps): AiModule {
       // 2. 调 LLM（LlmResult 不抛错；空回复视为失败，避免发空白消息）
       const result = await llm.complete({
         messages,
-        temperature: config.ark.temperature,
-        maxTokens: config.ark.maxTokens,
+        temperature: config.temperature,
+        maxTokens: config.maxTokens,
       })
 
       // 落 usage（无论成败都记录）
+      const resolved = resolveProvider(config)
+      const modelName = 'error' in resolved ? '' : resolved.model
       try {
         usageRepo.insert({
           conversation_id: conversationId,
           provider: config.provider,
-          model: config.ark.model,
+          model: modelName,
           prompt_tokens: result.ok && result.usage ? result.usage.promptTokens : null,
           completion_tokens: result.ok && result.usage ? result.usage.completionTokens : null,
           total_tokens: result.ok && result.usage ? result.usage.totalTokens : null,

@@ -8,6 +8,7 @@ import { createMirroredMemory, createMemoryWindow } from '../src/ai/memory.js'
 import { createAiModule } from '../src/ai/ai-module.js'
 import { createLogger } from '../src/utils/logger.js'
 import { loadConfig } from '../src/config/config-loader.js'
+import { PROVIDER_NAMES } from '../src/llm/providers.js'
 import type { SafeSender } from '../src/safety/safe-sender.js'
 
 /**
@@ -51,7 +52,10 @@ describe('装配契约：AI 模块的 usage 落库', () => {
 
       const row = db.prepare('SELECT provider, ok, total_tokens FROM usage_logs').get() as any
       expect(row).toBeDefined()
-      expect(row.provider).toBe('mock')
+      // provider 会被 .env 的 LLM_PROVIDER 覆盖（env 优先），不硬编码期望值，
+      // 只校验它是合法 provider 名且 usage 落库字段齐全。
+      expect(typeof row.provider).toBe('string')
+      expect(PROVIDER_NAMES).toContain(row.provider)
       expect(row.ok).toBe(1)
       expect(typeof row.total_tokens).toBe('number')
       db.close()

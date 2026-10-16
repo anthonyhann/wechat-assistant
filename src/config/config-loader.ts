@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
+import { PROVIDER_NAMES_WITH_ALIASES } from '../llm/providers.js'
 
 export class ConfigError extends Error {
   constructor (message: string) {
@@ -66,20 +67,35 @@ const BackupConfigSchema = z.object({
   retentionDays: z.number().int().positive().default(30),
 })
 
+const ProviderOverrideSchema = z.object({
+  baseUrl: z.string().url().optional(),
+  apiKeyEnv: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+})
+
 const AiConfigSchema = z.object({
-  provider: z.enum(['mock', 'ark', 'openai', 'arkcli']),
+  /** LLM 提供方名，来自 src/llm/providers.ts 的注册表（deepseek/qwen/glm/kimi/doubao/minimax/baichuan/openai/claude/gemini/arkcli/mock） */
+  provider: z.string().min(1),
+  /** 旧配置兼容节（provider=ark 时生效；新配置请用 providerOverrides） */
   ark: z.object({
     model: z.string().min(1),
     baseUrl: z.string().url(),
     apiKeyEnv: z.string().min(1),
     temperature: z.number().min(0).max(2),
     maxTokens: z.number().int().positive(),
-  }),
+  }).optional(),
+  /** 旧配置兼容节（provider=openai 时生效；新配置请用 providerOverrides） */
   openaiCompat: z.object({
     model: z.string().min(1),
     baseUrl: z.string().url(),
     apiKeyEnv: z.string().min(1),
-  }),
+  }).optional(),
+  /** 按 provider 名覆盖 preset 默认值（baseUrl / apiKeyEnv / model 均可覆盖） */
+  providerOverrides: z.record(z.string(), ProviderOverrideSchema).optional(),
+  /** 采样温度（所有 provider 通用，不再绑在 ark 节） */
+  temperature: z.number().min(0).max(2).default(0.7),
+  /** 单次回复最大 token 数 */
+  maxTokens: z.number().int().positive().default(1024),
   memory: z.object({
     enabled: z.boolean(),
     windowSize: z.number().int().positive(),
@@ -162,27 +178,46 @@ export function loadConfig (options?: { cwd?: string }): AppConfig {
     throw new ConfigError(`config/ai.json 校验失败: ${aiResult.error.issues.map(i => `${i.path.join('.')} ${i.message}`).join('; ')}`)
   }
 
-  // .env 的 LLM_PROVIDER 覆盖 json 的 provider（.env.example 承诺过此契约，
-  // 此前从未实现——导致「设了 LLM_PROVIDER=ark 却仍走 mock」的静默降级）。
+  // .env 的 LLM_PROVIDER 覆盖 json 的 provider（此前从未实现——
+  // 导致「设了 LLM_PROVIDER=ark 却仍走 mock」的静默降级）。
   // env 优先：切换提供方是部署期行为，不该改代码仓库里的配置文件。
   const envProvider = process.env['LLM_PROVIDER']
-  if (envProvider && ['mock', 'ark', 'openai', 'arkcli'].includes(envProvider)) {
-    aiResult.data.provider = envProvider as 'mock' | 'ark' | 'openai'
+  if (envProvider && PROVIDER_NAMES_WITH_ALIASES.includes(envProvider)) {
+    aiResult.data.provider = envProvider
+  } else if (envProvider) {
+    throw new ConfigError(`LLM_PROVIDER=${envProvider} 不是已知 provider（可选: ${PROVIDER_NAMES_WITH_ALIASES.join(', ')}）`)
   }
 
-  // 同理，.env 的 ARK_MODEL / ARK_BASE_URL / OPENAI_MODEL / OPENAI_BASE_URL
-  // 覆盖 json 的对应字段。此前这些变量只存在于 .env.example 而无人消费——
-  // 用户按 .env.example 改了模型/端点，实际仍用 json 里的旧值（404 的根因）。
+  // 通用 env 覆盖（推荐）：LLM_MODEL / LLM_BASE_URL / LLM_API_KEY_ENV
+  // 写进 providerOverrides，优先级高于 preset 默认值。
+  // 旧变量 ARK_MODEL / ARK_BASE_URL / OPENAI_MODEL / OPENAI_BASE_URL 仍兼容。
+  const provider = aiResult.data.provider
+  if (process.env['LLM_MODEL'] || process.env['LLM_BASE_URL'] || process.env['LLM_API_KEY_ENV']) {
+    const overrides = aiResult.data.providerOverrides ?? {}
+    overrides[provider] = {
+      ...overrides[provider],
+      ...(process.env['LLM_MODEL'] ? { model: process.env['LLM_MODEL']! } : {}),
+      ...(process.env['LLM_BASE_URL'] ? { baseUrl: process.env['LLM_BASE_URL']! } : {}),
+      ...(process.env['LLM_API_KEY_ENV'] ? { apiKeyEnv: process.env['LLM_API_KEY_ENV']! } : {}),
+    }
+    aiResult.data.providerOverrides = overrides
+  }
+
+  // 旧变量兼容（写进旧配置节，resolveProvider 会读到）
   //
   // ⚠️ arkcli provider 例外：它走本机 arkcli 的 profile 路由，用 env 覆盖 baseUrl
   // 会让 arkcli 判定「自定义数据面端点」从而强制要求 API key（与登录态互斥）。
   // 故 provider=arkcli 时只覆盖 model，不覆盖 baseUrl。
-  if (process.env['ARK_MODEL']) aiResult.data.ark.model = process.env['ARK_MODEL']!
-  if (process.env['ARK_BASE_URL'] && aiResult.data.provider !== 'arkcli') {
+  if (process.env['ARK_MODEL'] && aiResult.data.ark) aiResult.data.ark.model = process.env['ARK_MODEL']!
+  if (process.env['ARK_BASE_URL'] && aiResult.data.provider !== 'arkcli' && aiResult.data.ark) {
     aiResult.data.ark.baseUrl = process.env['ARK_BASE_URL']!
   }
-  if (process.env['OPENAI_MODEL']) aiResult.data.openaiCompat.model = process.env['OPENAI_MODEL']!
-  if (process.env['OPENAI_BASE_URL']) aiResult.data.openaiCompat.baseUrl = process.env['OPENAI_BASE_URL']!
+  if (process.env['OPENAI_MODEL'] && aiResult.data.openaiCompat) {
+    aiResult.data.openaiCompat.model = process.env['OPENAI_MODEL']!
+  }
+  if (process.env['OPENAI_BASE_URL'] && aiResult.data.openaiCompat) {
+    aiResult.data.openaiCompat.baseUrl = process.env['OPENAI_BASE_URL']!
+  }
 
   const safetyResult = SafetyConfigSchema.safeParse(readJson(cwd, 'safety.json'))
   if (!safetyResult.success) {

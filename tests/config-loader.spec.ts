@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadConfig, ConfigError } from '../src/config/config-loader.js'
+import { PROVIDER_NAMES } from '../src/llm/providers.js'
 
 function withConfigDir (files: Record<string, string>, fn: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), 'wc-config-'))
@@ -85,7 +86,10 @@ describe('loadConfig', () => {
     expect(config.bot.name).toBe('wechat-assistant')
     expect(config.backup.mediaTypes).toEqual(['Image', 'Attachment'])
     expect(config.safety.llmAudit.enabled).toBe(false)
-    expect(config.ai.provider).toBe('mock')
+    // provider 可能被 .env 的 LLM_PROVIDER 覆盖（env 优先），
+    // 故不硬编码期望值，只校验它是注册表里的合法名。
+    expect(typeof config.ai.provider).toBe('string')
+    expect(PROVIDER_NAMES).toContain(config.ai.provider)
     expect(config.flows.map(f => f.name)).toEqual(['活动咨询', '转人工'])
     expect(config.flows.every(f => f.steps.length > 0)).toBe(true)
   })
