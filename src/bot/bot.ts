@@ -1,6 +1,7 @@
 import { WechatyBuilder } from 'wechaty'
 import type { WechatyInterface } from 'wechaty/impls'
 import { PuppetMock } from 'wechaty-puppet-mock'
+import qrcode from 'qrcode'
 import type { AppConfig } from '../config/config-loader.js'
 import type { Logger } from '../utils/logger.js'
 
@@ -35,8 +36,16 @@ export function createBot (options: CreateBotOptions): BotHandle {
   })
 
   wechaty
-    .on('scan', (qrcode, status) => {
-      log.info('scan: %s (status=%s)', qrcode.slice(0, 40), status)
+    .on('scan', (qrcodeValue, status) => {
+      log.info('scan (status=%s): %s', status, qrcodeValue)
+      // 在终端画出可扫描的二维码（wechaty 的 scan 值就是登录 URL）
+      qrcode.toString(qrcodeValue, { type: 'terminal', small: true }, (err, str) => {
+        if (err) {
+          log.error('二维码渲染失败，请手动打开上面的链接: %s', qrcodeValue)
+          return
+        }
+        console.info(`\n${str}\n请用微信扫描上方二维码登录\n`)
+      })
     })
     .on('login', (user) => {
       log.info('login: %s', user.name())
