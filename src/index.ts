@@ -3,7 +3,7 @@ import 'dotenv/config'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadConfig } from './config/config-loader.js'
-import { createLogger } from './utils/logger.js'
+import { createLogger, flushLogs } from './utils/logger.js'
 import { createDatabase, MessageRepository, MediaFileRepository, WhitelistRepository, SafetyLogRepository, ConversationRepository, UsageRepository } from './storage/db.js'
 import { runRetentionCleanup } from './storage/retention.js'
 import { createBackupModule } from './backup/backup-module.js'
@@ -87,6 +87,8 @@ async function main (): Promise<void> {
     if (adminServer) await adminServer.stop()
     await bot.stop()
     db.close()
+    // process.exit 会中断 pino 的异步文件写入（文件流已配 sync:true，这里是双保险）
+    flushLogs()
     process.exit(0)
   }
   process.on('SIGINT', () => void shutdown('SIGINT'))
@@ -98,5 +100,6 @@ async function main (): Promise<void> {
 
 main().catch(e => {
   console.error('启动失败:', e)
+  flushLogs()
   process.exit(1)
 })
