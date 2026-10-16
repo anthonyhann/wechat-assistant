@@ -3,6 +3,7 @@ import type { Logger } from '../utils/logger.js'
 import type { LlmAdapter } from './llm-interface.js'
 import { createMockAdapter } from './llm-interface.js'
 import { createArkAdapter } from './ark-adapter.js'
+import { createArkcliAdapter } from './arkcli-adapter.js'
 import { createOpenaiAdapter } from './openai-adapter.js'
 
 export interface LlmFactoryOptions {
@@ -54,6 +55,11 @@ export function createLlmAdapter (opts: LlmFactoryOptions): LlmAdapter {
       // Task2 补的可选 log：失败时只记 model + 错误摘要，不记 key 与响应体
       log,
     })
+  }
+
+  // provider === 'arkcli'：Coding Plan 走 arkcli（本机需已登录）
+  if (config.provider === 'arkcli') {
+    return createArkcliAdapter({ model: config.ark.model, log })
   }
 
   // provider === 'openai'

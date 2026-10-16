@@ -67,7 +67,7 @@ const BackupConfigSchema = z.object({
 })
 
 const AiConfigSchema = z.object({
-  provider: z.enum(['mock', 'ark', 'openai']),
+  provider: z.enum(['mock', 'ark', 'openai', 'arkcli']),
   ark: z.object({
     model: z.string().min(1),
     baseUrl: z.string().url(),
@@ -161,6 +161,28 @@ export function loadConfig (options?: { cwd?: string }): AppConfig {
   if (!aiResult.success) {
     throw new ConfigError(`config/ai.json 校验失败: ${aiResult.error.issues.map(i => `${i.path.join('.')} ${i.message}`).join('; ')}`)
   }
+
+  // .env 的 LLM_PROVIDER 覆盖 json 的 provider（.env.example 承诺过此契约，
+  // 此前从未实现——导致「设了 LLM_PROVIDER=ark 却仍走 mock」的静默降级）。
+  // env 优先：切换提供方是部署期行为，不该改代码仓库里的配置文件。
+  const envProvider = process.env['LLM_PROVIDER']
+  if (envProvider && ['mock', 'ark', 'openai', 'arkcli'].includes(envProvider)) {
+    aiResult.data.provider = envProvider as 'mock' | 'ark' | 'openai'
+  }
+
+  // 同理，.env 的 ARK_MODEL / ARK_BASE_URL / OPENAI_MODEL / OPENAI_BASE_URL
+  // 覆盖 json 的对应字段。此前这些变量只存在于 .env.example 而无人消费——
+  // 用户按 .env.example 改了模型/端点，实际仍用 json 里的旧值（404 的根因）。
+  //
+  // ⚠️ arkcli provider 例外：它走本机 arkcli 的 profile 路由，用 env 覆盖 baseUrl
+  // 会让 arkcli 判定「自定义数据面端点」从而强制要求 API key（与登录态互斥）。
+  // 故 provider=arkcli 时只覆盖 model，不覆盖 baseUrl。
+  if (process.env['ARK_MODEL']) aiResult.data.ark.model = process.env['ARK_MODEL']!
+  if (process.env['ARK_BASE_URL'] && aiResult.data.provider !== 'arkcli') {
+    aiResult.data.ark.baseUrl = process.env['ARK_BASE_URL']!
+  }
+  if (process.env['OPENAI_MODEL']) aiResult.data.openaiCompat.model = process.env['OPENAI_MODEL']!
+  if (process.env['OPENAI_BASE_URL']) aiResult.data.openaiCompat.baseUrl = process.env['OPENAI_BASE_URL']!
 
   const safetyResult = SafetyConfigSchema.safeParse(readJson(cwd, 'safety.json'))
   if (!safetyResult.success) {
